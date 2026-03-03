@@ -4,25 +4,28 @@ This is a PoC - not fit for production use
 ## Getting Started
 
 ### Prerequisites
-- Docker with Docker Compose (production / standalone use)
-- **Devcontainer on K3S:** Podman is used instead of Docker inside the devcontainer (see below)
-- (Optional) A devcontainer-capable editor
+- Docker or Podman with Compose (to run the full stack — **must be run on the host machine, not inside the devcontainer**)
+- Python 3.9+ (for tests and running the ingress service directly)
+- (Optional) A devcontainer-capable editor (DevPod, VS Code)
 
-### Run the stack
+### Run the full stack (host machine only)
 
-**Outside the devcontainer (Docker):**
+> ⚠️ The devcontainer runs in DevPod "dockerless" mode — it has no container engine and cannot run `docker compose` or `podman-compose`. Run these commands on your **host machine**.
+
 ```bash
+# Docker
 docker compose up --build
-```
 
-**Inside the devcontainer on K3S (Podman):**
-```bash
+# Podman
 podman-compose up --build
-# or use the shell aliases set up by the devcontainer:
-docker compose up --build
 ```
 
-The `docker-compose.yml` is identical for both runtimes.
+Then pull a model (first time only):
+```bash
+docker exec -it ollama ollama pull llama3
+# or
+podman exec -it ollama ollama pull llama3
+```
 
 | Service    | URL                        | Notes                          |
 |------------|----------------------------|--------------------------------|
@@ -30,20 +33,30 @@ The `docker-compose.yml` is identical for both runtimes.
 | Ingress API| http://localhost:8000      | Internal orchestration API     |
 | Ollama     | http://localhost:11434     | Local LLM runtime              |
 
-### Verify the stub endpoint
+### Run the ingress service only (devcontainer / no Docker)
+
+To develop and iterate on the ingress API without the full stack:
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Note: without Ollama running, `/ingest` calls will hit the network-error path and return `intent=ambiguous`. Use the mock-based tests to work without Ollama.
+
+### Verify the endpoint
 
 ```bash
 curl -X POST http://localhost:8000/ingest \
   -H 'Content-Type: application/json' \
-  -d '{"input": "hello"}'
-# → {"intent":"stub","response":"Phase 0 OK"}
+  -d '{"input": "Write a haiku about databases"}'
+# → {"intent":"execution","confidence":0.92,"response":"..."}
 ```
 
 ### OpenWebUI
 
 1. Browse to http://localhost:3000 and create a local account.
-2. Type any message — you should receive the stub response **"Phase 0 OK"**.
-3. (Phase 1) Pull a model first: `docker exec ollama ollama pull llama3`
+2. Type any message — it routes through the ingress API to Ollama.
 
 ### Run smoke tests (no Docker required)
 
@@ -61,9 +74,9 @@ User (browser)
   └─► OpenWebUI  (port 3000)
         └─► POST /v1/chat/completions  (Ingress API, port 8000)
               └─► POST /ingest  (internal orchestration)
-                    Phase 0: stub response
-                    Phase 1+: Classifier → Router → Worker → Ollama
+                    ├─► Classifier (Ollama) → intent + confidence
+                    ├─► Router (pure Python) → handler
+                    └─► Worker (Ollama) → response
 ```
 
 See [PLAN.md](PLAN.md) for the full architecture description.
-

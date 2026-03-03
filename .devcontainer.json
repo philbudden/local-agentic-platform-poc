@@ -2,16 +2,8 @@
   "name": "agentic-platform",
   "image": "mcr.microsoft.com/devcontainers/python:3",
   "features": {
-    "ghcr.io/rio/features/chezmoi:1": {},
-    "ghcr.io/devcontainers/features/podman:1": {
-      "version": "latest",
-      "installDockerBuildx": false
-    }
+    "ghcr.io/rio/features/chezmoi:1": {}
   },
-  "onCreateCommand": "echo 'alias docker=podman' >> ~/.bashrc && echo 'alias docker-compose=podman-compose' >> ~/.bashrc",
-  "postCreateCommand": "sudo apt-get update -qq && sudo apt-get install -y -qq podman && pip install -r requirements.txt && pip install podman-compose",
-  "containerEnv": {
-    "DOCKER_HOST": "unix:///run/user/1000/podman/podman.sock"
-  },
-  "forwardPorts": [3000, 8000, 11434]
+  "postCreateCommand": "pip install -r requirements.txt",
+  "forwardPorts": [8000]
 }
