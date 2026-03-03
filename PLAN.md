@@ -1,183 +1,200 @@
-# PLAN.md — Minimal Local Agentic PoC
+# PLAN_PHASE1_TAILORED.md
 
-## Objective
+## Local Agentic Platform -- Phase 1 (Tailored to Current Repo)
 
-Build a minimal, local-first proof-of-concept demonstrating:
-- Deterministic orchestration around LLMs
-- Explicit intent classification
-- Separation between control logic and model reasoning
-- Integration with OpenWebUI as a UI only
+Date: 2026-03-03
 
-This system must be simple, auditable, and runnable on a Mac Mini using Docker.
+------------------------------------------------------------------------
 
----
+# Current Repository Structure (Observed)
 
-## Non-Goals (Explicitly Out of Scope)
+Root: - Dockerfile - docker-compose.yml - requirements.txt - PLAN.md -
+README.md - .devcontainer.json
 
-- No cloud APIs
-- No long-term memory
-- No vector databases
-- No tool execution (filesystem, shell, etc.)
-- No multi-agent collaboration
-- No async queues or background workers
+/app: - main.py - classifier.py - router.py - worker.py - models.py -
+settings.py
 
----
+/tests: - test_smoke.py
 
-## Architecture Overview
+Phase 0 confirms: - OpenWebUI → Ingress proxy working - `/ingest`
+endpoint stubbed - Docker stack healthy - Smoke tests runnable
 
-User → OpenWebUI → Ingress API → Classifier → Router → Worker Agent → Response
+------------------------------------------------------------------------
 
-All orchestration logic lives in Python.
-LLMs are used only for classification and generation.
+# Phase 1 Objective
 
----
+Replace stub logic in `app/main.py` with:
 
-## Technology Choices
+Classifier (LLM via Ollama) → Deterministic Router (Python) → Worker
+(LLM via Ollama) → Structured response
 
-- Python 3.11
-- FastAPI
-- Ollama HTTP API
-- Docker / Docker Compose
-- One local 7B–8B model (same model for all roles)
+Maintain strict control-plane separation.
 
----
+No memory. No tools. No cloud APIs. No architectural expansion beyond
+current files.
 
-## Core Components
+------------------------------------------------------------------------
 
-### 1. Ingress API (FastAPI)
+# File-by-File Implementation Plan
 
-Responsibilities:
-- Accept POST requests containing raw user input
-- Orchestrate classification and routing
-- Return final response
+## 1. app/settings.py
 
-No business logic should live in LLM prompts.
+Add explicit configuration:
 
----
+-   OLLAMA_BASE_URL (default: http://ollama:11434)
+-   CLASSIFIER_MODEL (e.g. llama3)
+-   WORKER_MODEL (same for now)
+-   REQUEST_TIMEOUT
+-   MAX_TOKENS
 
-### 2. Classifier Agent (LLM)
+All model names must be configurable via environment variables in
+docker-compose.yml.
 
-Purpose:
-- Categorise user intent
+------------------------------------------------------------------------
 
-Allowed outputs (STRICT JSON ONLY):
+## 2. app/models.py
 
-```json
-{
-  "intent": "execution" | "decomposition" | "novel_reasoning" | "ambiguous",
-  "confidence": 0.0-1.0
-}
-```
+Define strict Pydantic schemas:
 
-Rules:
-- Stateless
-- No tools
-- No memory
-- No explanations
-- Output must be machine-consumable
+ClassifierResponse: - intent:
+Literal\["execution","decomposition","novel_reasoning","ambiguous"\] -
+confidence: float
 
-⸻
+IngestRequest: - input: str
 
-### 3. Router (Python)
+IngestResponse: - intent: str - confidence: float - response: str
 
-Purpose:
-- Deterministically select execution path based on classifier output
+Validation must fail loudly if classifier JSON invalid.
 
-Rules:
-- Router is NOT an LLM
-- No probabilistic decisions
-- Hard-coded mapping is acceptable for PoC
+------------------------------------------------------------------------
 
-Example logic:
-- execution → worker_agent
-- decomposition → worker_agent
-- novel_reasoning → worker_agent
-- ambiguous → clarification response
+## 3. app/classifier.py
 
-⸻
+Responsibilities: - Call Ollama `/api/generate` - Enforce JSON-only
+output - Validate against ClassifierResponse schema - Retry once if JSON
+invalid - On second failure → return: intent="ambiguous" confidence=0.0
 
-### 4. Worker Agent (LLM)
+Classifier must: - Be stateless - Use deterministic temperature
+(e.g. 0) - Never include reasoning text
 
-Purpose:
-- Produce final user-facing response
+------------------------------------------------------------------------
 
-Rules:
-- No memory
-- No tools
-- Receives:
-- Original user input
-- Classifier intent
-- Free-form natural language output
+## 4. app/router.py
 
-⸻
+Router must be PURE PYTHON.
 
-## API Design
+No LLM calls allowed.
 
-### POST /ingest
+Implement function:
 
-Request:
-```json
-{
-  "input": "string"
-}
-```
+route(intent: str) -\> str
 
-Response:
-```json
-{
-  "intent": "string",
-  "response": "string"
-}
-```
+Mapping (Phase 1): - execution → "worker" - decomposition → "worker" -
+novel_reasoning → "worker" - ambiguous → "clarify"
 
-### OpenWebUI Integration
+Router does not inspect user text.
 
-- OpenWebUI forwards user messages to /ingest
-- OpenWebUI displays returned response
-- OpenWebUI does NOT manage:
-- Agent logic
-- Routing
-- Memory
-- Tools
+------------------------------------------------------------------------
 
-⸻
+## 5. app/worker.py
 
-### Folder Structure
+Responsibilities: - Accept (input_text, intent) - Call Ollama - Return
+natural language response
 
-```text
-/app
-  main.py          # FastAPI app
-  classifier.py    # LLM classification call
-  router.py        # Deterministic routing logic
-  worker.py        # LLM generation call
-  models.py        # Pydantic schemas
-  settings.py      # Model names, URLs
-Dockerfile
-docker-compose.yml
-```
+Worker must: - Not modify routing - Not perform classification - Not
+persist state - Not call other agents
 
-### Success Criteria
-- System runs locally via Docker
-- Classifier returns valid JSON every time
-- Router never calls an LLM
-- One prompt in → one response out
-- Architecture is understandable without diagrams
+------------------------------------------------------------------------
 
-⸻
+## 6. app/main.py
 
-### Future Extensions (Not Implemented)
+Update `/ingest`:
 
-- Planner agent
-- Memory tiers
-- Tool-enabled agents
-- Rate limits and budgets
-- Multi-model routing
+Flow:
 
-⸻
+1.  Parse IngestRequest
+2.  Call classifier
+3.  Call router
+4.  If route == "clarify": return clarification template Else: call
+    worker
+5.  Return IngestResponse
 
-## Guiding Principle
+Remove stub logic entirely.
 
-“LLMs propose. Code disposes.”
+------------------------------------------------------------------------
 
-LLMs are not trusted with control flow, persistence, or side effects.
+# docker-compose.yml Updates
+
+Ensure:
+
+-   ollama service exists
+-   Ingress service depends_on ollama
+-   Environment variables passed to container
+-   Ports unchanged
+
+Optional: Add healthcheck for Ollama.
+
+------------------------------------------------------------------------
+
+# Testing Expansion
+
+Extend `tests/test_smoke.py`:
+
+Add:
+
+1.  Test classifier schema validation
+2.  Test router deterministic mapping
+3.  Test worker returns non-empty string (mock Ollama if needed)
+4.  Test full `/ingest` happy path
+
+Keep tests lightweight. No external services required for unit tests.
+
+------------------------------------------------------------------------
+
+# Logging Requirements
+
+Add structured logging in main.py:
+
+Log: - intent - confidence - model latency - total request latency
+
+No tracing stack required.
+
+------------------------------------------------------------------------
+
+# Success Criteria
+
+-   `/ingest` no longer returns stub
+-   Real Ollama call confirmed
+-   Invalid classifier output handled safely
+-   Router contains zero LLM logic
+-   All tests pass
+-   Total new code \< \~300 lines
+
+------------------------------------------------------------------------
+
+# Guardrails
+
+-   No new directories
+-   No planner agent yet
+-   No memory tier
+-   No tool execution
+-   No async complexity
+
+Architecture must remain understandable in \<10 minutes of reading.
+
+------------------------------------------------------------------------
+
+# Phase 2 (Preview Only)
+
+-   Planner agent
+-   Budget guardrails
+-   Memory tiers
+-   Tool-enabled worker
+-   Model escalation policies
+
+------------------------------------------------------------------------
+
+Guiding Principle:
+
+LLMs propose. Code disposes.
 
