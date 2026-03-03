@@ -17,36 +17,40 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_TEMPLATE = """\
+# Prompt header is fixed text; user input is appended via concatenation to
+# avoid Python str.format() treating user-supplied braces as placeholders.
+_PROMPT_HEADER = """\
 Classify the following user input into exactly one intent category.
 
 Reply with ONLY valid JSON — no prose, no markdown, no code fences.
-Schema: {{"intent": "<category>", "confidence": <0.0-1.0>}}
+Schema: {"intent": "<category>", "confidence": <0.0-1.0>}
 Valid intents: execution, decomposition, novel_reasoning, ambiguous
 
-User input: {user_input}"""
-
-_FALLBACK = ClassifierResponse(intent="ambiguous", confidence=0.0)
+User input: """
 
 
 async def classify(user_input: str) -> ClassifierResponse:
     """Classify *user_input* and return a ClassifierResponse.
 
-    Retries once on bad JSON; returns fallback on second failure.
+    Retries once on bad JSON or network error; returns fallback on second failure.
     """
     for attempt in range(2):
-        raw = await _call_ollama(user_input)
+        try:
+            raw = await _call_ollama(user_input)
+        except httpx.HTTPError as exc:
+            logger.warning("Classifier attempt %d network error: %s", attempt + 1, exc)
+            continue
         result = _parse(raw)
         if result is not None:
             return result
         logger.warning("Classifier attempt %d produced invalid JSON: %r", attempt + 1, raw)
 
     logger.error("Classifier failed after 2 attempts; returning fallback.")
-    return _FALLBACK
+    return ClassifierResponse(intent="ambiguous", confidence=0.0)
 
 
 async def _call_ollama(user_input: str) -> str:
-    prompt = _PROMPT_TEMPLATE.format(user_input=user_input)
+    prompt = _PROMPT_HEADER + user_input
     payload = {
         "model": settings.classifier_model,
         "prompt": prompt,

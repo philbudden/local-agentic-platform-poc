@@ -12,16 +12,15 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_TEMPLATE = """\
-You are a helpful assistant. The user's request has been classified as: {intent}.
-
-Respond helpfully and concisely to the following:
-{user_input}"""
+# Prompt header is fixed text; user input is appended via concatenation to
+# avoid Python str.format() treating user-supplied braces as placeholders.
+_PROMPT_HEADER = "You are a helpful assistant. The user's request has been classified as: "
+_PROMPT_BODY = "\n\nRespond helpfully and concisely to the following:\n"
 
 
 async def generate(user_input: str, intent: str) -> str:
     """Generate a response for *user_input* given *intent*."""
-    prompt = _PROMPT_TEMPLATE.format(intent=intent, user_input=user_input)
+    prompt = _PROMPT_HEADER + intent + _PROMPT_BODY + user_input
     payload = {
         "model": settings.worker_model,
         "prompt": prompt,

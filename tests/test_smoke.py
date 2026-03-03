@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.main import app
 from app.models import ClassifierResponse
@@ -53,8 +54,38 @@ def test_classifier_response_valid():
 
 
 def test_classifier_response_rejects_invalid_intent():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ClassifierResponse(intent="nonsense", confidence=0.5)
+
+
+# ---------------------------------------------------------------------------
+# Classifier behaviour (unit — patching _call_ollama)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_classifier_falls_back_on_network_error():
+    """Ollama unreachable on both attempts → intent=ambiguous, confidence=0.0."""
+    import httpx
+    from app.classifier import classify
+
+    with patch("app.classifier._call_ollama", side_effect=httpx.ConnectError("refused")):
+        result = await classify("hello")
+
+    assert result.intent == "ambiguous"
+    assert result.confidence == 0.0
+
+
+@pytest.mark.anyio
+async def test_classifier_falls_back_on_invalid_json():
+    """Ollama returns non-JSON on both attempts → intent=ambiguous, confidence=0.0."""
+    from app.classifier import classify
+
+    with patch("app.classifier._call_ollama", return_value="not json at all"):
+        result = await classify("hello")
+
+    assert result.intent == "ambiguous"
+    assert result.confidence == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +131,16 @@ def test_ingest_ambiguous_returns_clarification():
 def test_ingest_rejects_missing_input():
     response = client.post("/ingest", json={})
     assert response.status_code == 422
+
+
+def test_ingest_curly_braces_in_input_do_not_crash(mock_classify_execution, mock_worker_response):
+    """User input containing Python format placeholders must not raise KeyError."""
+    with (
+        patch("app.main.classify", mock_classify_execution),
+        patch("app.main.generate", mock_worker_response),
+    ):
+        response = client.post("/ingest", json={"input": "what does {foo} mean in {bar}?"})
+    assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------
