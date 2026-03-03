@@ -5,15 +5,26 @@ Exposes:
   POST /v1/chat/completions     — OpenAI-compatible shim for OpenWebUI
 """
 
+import logging
 import time
 import uuid
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from app.classifier import classify
 from app.models import IngestRequest, IngestResponse
+from app.router import route
+from app.worker import generate
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Agentic Platform — Ingress API")
+
+_CLARIFY_RESPONSE = (
+    "I'm not sure what you're asking. Could you provide more detail or clarify your request?"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -23,12 +34,38 @@ app = FastAPI(title="Agentic Platform — Ingress API")
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest(request: IngestRequest) -> IngestResponse:
-    """Accept user input, orchestrate classification and routing, return response.
+    """Accept user input, orchestrate classification and routing, return response."""
+    t_start = time.monotonic()
 
-    Phase 0: returns a hard-coded stub so the full request path can be verified
-    before any LLM integration is in place.
-    """
-    return IngestResponse(intent="stub", response="Phase 0 OK")
+    classifier_result = await classify(request.input)
+    t_classified = time.monotonic()
+
+    handler = route(classifier_result.intent)
+
+    if handler == "clarify":
+        response_text = _CLARIFY_RESPONSE
+        t_worker = t_classified
+    else:
+        response_text = await generate(request.input, classifier_result.intent)
+        t_worker = time.monotonic()
+
+    total_latency = time.monotonic() - t_start
+    logger.info(
+        "ingest completed",
+        extra={
+            "intent": classifier_result.intent,
+            "confidence": classifier_result.confidence,
+            "classifier_latency_s": round(t_classified - t_start, 3),
+            "worker_latency_s": round(t_worker - t_classified, 3),
+            "total_latency_s": round(total_latency, 3),
+        },
+    )
+
+    return IngestResponse(
+        intent=classifier_result.intent,
+        confidence=classifier_result.confidence,
+        response=response_text,
+    )
 
 
 # ---------------------------------------------------------------------------
