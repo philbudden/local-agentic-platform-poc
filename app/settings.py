@@ -5,7 +5,10 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     ollama_base_url: str = "http://ollama:11434"
-    model_name: str = "llama3"
+    classifier_model: str = "llama3"
+    worker_model: str = "llama3"
+    request_timeout: int = 60
+    max_tokens: int = 512
     ingress_port: int = 8000
 
     class Config:
