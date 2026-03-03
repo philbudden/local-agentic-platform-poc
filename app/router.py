@@ -1,18 +1,19 @@
 """Deterministic router — maps classifier intent to execution path.
 
 The router is NOT an LLM. No probabilistic decisions are made here.
-
-Phase 0 stub: not yet implemented.
 """
 
 ROUTES: dict[str, str] = {
-    "execution": "worker_agent",
-    "decomposition": "worker_agent",
-    "novel_reasoning": "worker_agent",
-    "ambiguous": "clarification",
+    "execution": "worker",
+    "decomposition": "worker",
+    "novel_reasoning": "worker",
+    "ambiguous": "clarify",
 }
 
 
 def route(intent: str) -> str:
-    """Return the handler name for *intent*. (stub)"""
-    raise NotImplementedError("Router not implemented until Phase 1")
+    """Return the handler name for *intent*.
+
+    Unknown intents are treated as ambiguous and mapped to 'clarify'.
+    """
+    return ROUTES.get(intent, "clarify")
