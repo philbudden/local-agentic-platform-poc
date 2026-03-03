@@ -8,6 +8,7 @@ intent="ambiguous", confidence=0.0 on second failure.
 
 import json
 import logging
+from typing import Optional
 
 import httpx
 from pydantic import ValidationError
@@ -63,7 +64,7 @@ async def _call_ollama(user_input: str) -> str:
         return resp.json()["response"]
 
 
-def _parse(raw: str) -> ClassifierResponse | None:
+def _parse(raw: str) -> Optional[ClassifierResponse]:
     try:
         data = json.loads(raw.strip())
         return ClassifierResponse(**data)
