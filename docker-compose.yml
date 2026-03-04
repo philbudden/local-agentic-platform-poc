@@ -23,6 +23,7 @@ services:
       - CLASSIFIER_TIMEOUT=60
       - WORKER_TIMEOUT=300
       - MAX_TOKENS=256
+      - LOG_LEVEL=INFO
     depends_on:
       - ollama
     networks:

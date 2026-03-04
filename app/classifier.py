@@ -21,35 +21,17 @@ logger = logging.getLogger(__name__)
 # Prompt header is fixed text; user input is appended via concatenation to
 # avoid Python str.format() treating user-supplied braces as placeholders.
 _PROMPT_HEADER = """\
-Classify the following user input into exactly one intent category.
+Classify the user input below into exactly one intent. Reply with ONLY valid JSON.
+Schema: {"intent": "execution|decomposition|novel_reasoning|ambiguous", "confidence": 0.0-1.0}
 
-Reply with ONLY valid JSON — no prose, no markdown, no code fences.
-Use exactly this schema: {"intent": "<category>", "confidence": <0.0-1.0>}
-The "intent" field MUST be one of these exact strings:
-  execution, decomposition, novel_reasoning, ambiguous
-
-Category definitions and examples:
-
-- execution: a concrete, bounded task with a clear deliverable.
-    Examples: "Write a haiku about databases", "Translate this to French",
-    "Summarize the theory of relativity in 3 sentences",
-    "Write a function that reverses a string", "Calculate 15% of 200".
-    Key signal: the output format is known and finite.
-
-- decomposition: a broad goal that requires breaking into multiple sub-tasks or phases.
-    Examples: "How would I build a scalable SaaS architecture?",
-    "What steps are needed to launch a startup?",
-    "Plan a migration from monolith to microservices".
-    Key signal: the request implies a multi-step process or plan.
-
-- novel_reasoning: open-ended analysis, speculation, or synthesis with no single right answer.
-    Examples: "Design a new economic system for Mars colonies",
-    "What are the ethical implications of AI?",
-    "Compare capitalism and socialism".
-    Key signal: the answer requires original thinking, not execution of a known task.
-
-- ambiguous: unclear or underspecified — not enough context to classify.
-    Examples: "Help.", "Do the thing.", "What about it?"
+intent values:
+- execution: concrete task with a specific deliverable (write, translate, calculate, summarise, code)
+  e.g. "Write a haiku", "Summarise X in 3 sentences", "Translate this", "Write a function"
+- decomposition: broad goal needing a multi-step plan (how to build, steps to launch, architect)
+  e.g. "How would I build a SaaS?", "Plan a migration", "Steps to launch a startup"
+- novel_reasoning: open-ended thinking with no single right answer (design, compare, analyse, ethics)
+  e.g. "Design an economy for Mars", "Compare capitalism and socialism"
+- ambiguous: too vague to classify e.g. "Help.", "Do the thing."
 
 User input: """
 
@@ -109,7 +91,9 @@ async def _call_ollama(user_input: str) -> str:
     async with httpx.AsyncClient(timeout=settings.classifier_timeout) as client:
         resp = await client.post(f"{settings.ollama_base_url}/api/generate", json=payload)
         resp.raise_for_status()
-        return resp.json()["response"]
+        raw = resp.json()["response"]
+        logger.debug("Classifier raw response: %r", raw)
+        return raw
 
 
 def _parse(raw: str) -> Optional[ClassifierResponse]:

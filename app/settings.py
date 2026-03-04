@@ -8,9 +8,10 @@ class Settings(BaseSettings):
     classifier_model: str = "llama3"
     worker_model: str = "llama3"
     classifier_timeout: int = 60   # short: classifier generates ~30 JSON tokens
-    worker_timeout: int = 300      # long: worker may generate 512 tokens on CPU
+    worker_timeout: int = 300      # long: worker may generate up to 256 tokens on CPU
     max_tokens: int = 256
     ingress_port: int = 8000
+    log_level: str = "INFO"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

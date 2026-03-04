@@ -16,9 +16,10 @@ from pydantic import BaseModel
 from app.classifier import classify
 from app.models import IngestRequest, IngestResponse
 from app.router import route
+from app.settings import settings
 from app.worker import generate
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Agentic Platform — Ingress API")
