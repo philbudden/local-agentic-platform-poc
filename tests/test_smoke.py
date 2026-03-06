@@ -71,7 +71,7 @@ async def test_classifier_falls_back_on_network_error():
     from app.classifier import classify
 
     with patch("app.classifier._call_ollama", side_effect=httpx.ConnectError("refused")):
-        result = await classify("hello")
+        result = await classify("Compare quantum and classical computing")
 
     assert result.intent == "ambiguous"
     assert result.confidence == 0.0
@@ -83,7 +83,7 @@ async def test_classifier_falls_back_on_invalid_json():
     from app.classifier import classify
 
     with patch("app.classifier._call_ollama", return_value="not json at all"):
-        result = await classify("hello")
+        result = await classify("Compare quantum and classical computing")
 
     assert result.intent == "ambiguous"
     assert result.confidence == 0.0
@@ -331,3 +331,76 @@ def test_ingest_worker_timeout_returns_graceful_response():
     body = response.json()
     assert body["intent"] == "ambiguous"
     assert body["confidence"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: observability — /debug/routes, correlation IDs, router logging
+# ---------------------------------------------------------------------------
+
+
+def test_debug_routes_returns_routing_table():
+    """GET /debug/routes returns the intent→handler mapping."""
+    response = client.get("/debug/routes")
+    assert response.status_code == 200
+    body = response.json()
+    assert "routes" in body
+    routes = body["routes"]
+    assert routes["execution"] == "worker"
+    assert routes["planning"] == "worker"
+    assert routes["analysis"] == "worker"
+    assert routes["ambiguous"] == "clarify"
+
+
+def test_ingest_response_contains_expected_fields(mock_classify_execution, mock_worker_response):
+    """Response schema is intact after Phase 3 wiring changes."""
+    with (
+        patch("app.main.classify", mock_classify_execution),
+        patch("app.main.generate", mock_worker_response),
+    ):
+        response = client.post("/ingest", json={"input": "Write a poem"})
+    assert response.status_code == 200
+    body = response.json()
+    assert "intent" in body
+    assert "confidence" in body
+    assert "response" in body
+
+
+def test_router_unknown_intent_logs_fallback(caplog):
+    """route() emits a router_fallback warning for unrecognised intents."""
+    import logging
+
+    from app.router import route
+
+    with caplog.at_level(logging.WARNING, logger="app.router"):
+        handler = route("totally_unknown", request_id="test-123")
+
+    assert handler == "clarify"
+    assert any("router_fallback" in r.message for r in caplog.records)
+    assert any("totally_unknown" in r.message for r in caplog.records)
+
+
+def test_router_known_intent_logs_intent_router(caplog):
+    """route() emits an intent_router info log for every routing decision."""
+    import logging
+
+    from app.router import route
+
+    with caplog.at_level(logging.INFO, logger="app.router"):
+        handler = route("execution", request_id="test-456", confidence=0.95)
+
+    assert handler == "worker"
+    assert any("intent_router" in r.message for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_classifier_result_logged_for_prefix_match(caplog):
+    """classify() emits classifier_result log even when prefix check short-circuits."""
+    import logging
+
+    from app.classifier import classify
+
+    with caplog.at_level(logging.INFO, logger="app.classifier"):
+        await classify("Write a haiku", request_id="test-789")
+
+    assert any("classifier_result" in r.message for r in caplog.records)
+    assert any("prefix_match" in r.message for r in caplog.records)
