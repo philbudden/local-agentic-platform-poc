@@ -3,6 +3,7 @@
 Exposes:
   POST /ingest                  — internal schema used by custom clients
   POST /v1/chat/completions     — OpenAI-compatible shim for OpenWebUI
+  GET  /debug/routes            — development: inspect intent→handler routing table
 """
 
 import logging
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 
 from app.classifier import classify
 from app.models import IngestRequest, IngestResponse
-from app.router import route
+from app.router import ROUTES, route
 from app.settings import settings
 from app.worker import generate
 
@@ -40,19 +41,30 @@ _WORKER_FAILURE_RESPONSE = (
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest(request: IngestRequest) -> IngestResponse:
     """Accept user input, orchestrate classification and routing, return response."""
+    request_id = uuid.uuid4().hex
     t_start = time.monotonic()
 
-    classifier_result = await classify(request.input)
+    logger.info(
+        "event=request_received request_id=%s",
+        request_id,
+    )
+
+    classifier_result = await classify(request.input, request_id)
     t_classified = time.monotonic()
 
-    handler = route(classifier_result.intent)
+    handler = route(
+        classifier_result.intent,
+        request_id=request_id,
+        user_input=request.input,
+        confidence=classifier_result.confidence,
+    )
 
     if handler == "clarify":
         response_text = _CLARIFY_RESPONSE
         t_worker = t_classified
     else:
         try:
-            response_text = await generate(request.input, classifier_result.intent)
+            response_text = await generate(request.input, classifier_result.intent, request_id)
         except httpx.HTTPError as exc:
             status = getattr(exc.response, "status_code", "N/A") if hasattr(exc, "response") else "N/A"
             body = ""
@@ -62,8 +74,8 @@ async def ingest(request: IngestRequest) -> IngestResponse:
                 except Exception:
                     pass
             logger.error(
-                "Worker call failed: %s status=%s body=%r error=%s",
-                type(exc).__name__, status, body, exc,
+                "event=worker_error request_id=%s error_type=%s status=%s body=%r error=%s",
+                request_id, type(exc).__name__, status, body, exc,
             )
             response_text = _WORKER_FAILURE_RESPONSE
             classifier_result = classifier_result.model_copy(
@@ -71,15 +83,16 @@ async def ingest(request: IngestRequest) -> IngestResponse:
             )
         t_worker = time.monotonic()
 
-    total_latency = time.monotonic() - t_start
+    total_latency_ms = int((time.monotonic() - t_start) * 1000)
     logger.info(
-        "request complete intent=%s confidence=%.2f "
-        "classifier_latency_s=%.3f worker_latency_s=%.3f total_latency_s=%.3f",
+        "event=request_complete request_id=%s intent=%s confidence=%.2f "
+        "classifier_latency_ms=%d worker_latency_ms=%d total_latency_ms=%d",
+        request_id,
         classifier_result.intent,
         classifier_result.confidence,
-        round(t_classified - t_start, 3),
-        round(t_worker - t_classified, 3),
-        round(total_latency, 3),
+        int((t_classified - t_start) * 1000),
+        int((t_worker - t_classified) * 1000),
+        total_latency_ms,
     )
 
     return IngestResponse(
@@ -136,6 +149,17 @@ async def chat_completions(request: _OAIChatRequest) -> dict:
         ],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+
+# ---------------------------------------------------------------------------
+# Debug endpoint (development only)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/debug/routes")
+async def debug_routes() -> dict:
+    """Return the current intent→handler routing table for development inspection."""
+    return {"routes": ROUTES}
 
 
 # ---------------------------------------------------------------------------
