@@ -58,6 +58,8 @@ Both default to `llama3.2:3b`. Any model available in your Ollama installation c
 | `OLLAMA_BASE_URL`  | `http://host.docker.internal:11434` | Ollama endpoint |
 | `CLASSIFIER_MODEL` | `llama3.2:3b`  | Intent classification      |
 | `WORKER_MODEL`     | `llama3.2:3b`  | Response generation        |
+| `LOG_LEVEL`        | `INFO`         | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
+| `DEBUG_ROUTER`     | `false`        | When `true`, logs classifier and worker prompts at DEBUG level |
 
 ### Run the ingress service only (devcontainer / no Docker)
 
@@ -87,6 +89,52 @@ curl -X POST http://localhost:8000/ingest \
 ```bash
 pip install -r requirements.txt
 pytest tests/test_smoke.py -v
+```
+
+---
+
+## Observability
+
+### Checking logs
+
+Each request is assigned a unique `request_id`. All log lines include `event=<name>` and `request_id=<id>` so you can trace a single request end-to-end.
+
+**Docker (follow live):**
+```bash
+docker compose logs -f ingress
+```
+
+**Filter a single request by ID:**
+```bash
+docker compose logs ingress | grep "request_id=<id>"
+```
+
+**Expected log sequence for a successful request:**
+```
+event=request_received request_id=<id>
+event=llm_call request_id=<id> call=1/2 ...
+event=classifier_result request_id=<id> intent=execution confidence=0.95 source=llm
+event=classifier_latency request_id=<id> latency_ms=...
+event=intent_router request_id=<id> intent=execution route=worker ...
+event=worker_start request_id=<id> worker=worker intent=execution
+event=llm_call request_id=<id> call=2/2 ...
+event=worker_complete request_id=<id> worker=worker latency_ms=...
+event=request_complete request_id=<id> intent=execution confidence=... total_latency_ms=...
+```
+
+### Enable debug logging
+
+Set `DEBUG_ROUTER=true` to log the classifier system prompt and worker prompt at `DEBUG` level:
+
+```bash
+DEBUG_ROUTER=true LOG_LEVEL=DEBUG docker compose up --build
+```
+
+### Inspect the routing table
+
+```bash
+curl http://localhost:8000/debug/routes
+# → {"routes":{"execution":"worker","planning":"worker","analysis":"worker","ambiguous":"clarify"}}
 ```
 
 ---

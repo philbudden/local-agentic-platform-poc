@@ -17,6 +17,18 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # Run the full stack (host machine only — not inside devcontainer)
 docker compose up --build
+
+# Enable debug prompt logging
+DEBUG_ROUTER=true LOG_LEVEL=DEBUG docker compose up --build
+
+# Follow ingress logs live
+docker compose logs -f ingress
+
+# Trace a single request by correlation ID
+docker compose logs ingress | grep "request_id=<id>"
+
+# Inspect live routing table
+curl http://localhost:8000/debug/routes
 ```
 
 ## Architecture
