@@ -15,21 +15,30 @@ logger = logging.getLogger(__name__)
 
 # Intent-specific prompt templates; user input is appended via concatenation to
 # avoid Python str.format() treating user-supplied braces as placeholders.
+#
+# All prompts instruct the LLM to respond with a JSON action envelope so that
+# the ToolExecutor can either relay the content directly or invoke a tool.
 _PROMPTS: dict[str, str] = {
     "execution": (
         "You are a precise assistant. The user has asked you to perform a concrete task.\n"
         "Give a direct, concise answer. No planning structure. No preamble. No commentary.\n"
         "Respond in no more than 150 words.\n\n"
+        'You MUST respond with valid JSON using exactly this format:\n'
+        '{"action": "respond", "content": "<your complete answer here>"}\n\n'
         "User request: "
     ),
     "planning": (
         "You are a structured assistant. The user needs a task broken into steps.\n"
         "Provide exactly 3 to 5 numbered steps. One sentence per step. No preamble.\n\n"
+        'You MUST respond with valid JSON using exactly this format:\n'
+        '{"action": "respond", "content": "<your numbered steps here>"}\n\n'
         "User request: "
     ),
     "analysis": (
         "You are an analytical assistant. The user wants open-ended thinking.\n"
         "Give a focused, insightful response. Limit to 3 sentences.\n\n"
+        'You MUST respond with valid JSON using exactly this format:\n'
+        '{"action": "respond", "content": "<your analytical response here>"}\n\n'
         "User request: "
     ),
 }
