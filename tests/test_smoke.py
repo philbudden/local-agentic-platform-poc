@@ -1,4 +1,4 @@
-"""Smoke and unit tests for the Ingress API (Phase 1 + Phase 2).
+"""Smoke and unit tests for the Ingress API (Phase 1–4 / v0.2.0).
 
 Tests run against the FastAPI TestClient — no Docker, no Ollama required.
 Ollama calls are mocked via unittest.mock.
@@ -16,7 +16,6 @@ from app.models import ClassifierResponse
 from app.router import route
 
 client = TestClient(app)
-
 
 # ---------------------------------------------------------------------------
 # Router unit tests (pure Python — no mocking needed)
@@ -142,7 +141,8 @@ def mock_classify_execution():
 
 @pytest.fixture
 def mock_worker_response():
-    return AsyncMock(return_value="Here is the result.")
+    # Returns a proper JSON action envelope so the executor path is exercised.
+    return AsyncMock(return_value='{"action": "respond", "content": "Here is the result."}')
 
 
 def test_ingest_happy_path(mock_classify_execution, mock_worker_response):
@@ -412,3 +412,322 @@ async def test_classifier_result_logged_for_prefix_match(caplog):
 
     assert any("classifier_result" in r.message for r in caplog.records)
     assert any("prefix_match" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: Tool Registry unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_tool_registry_register_and_get():
+    """Registered tool is retrievable by name."""
+    from core.tools import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(
+        name="echo",
+        description="Return the input unchanged",
+        input_schema={"text": "string"},
+        function=lambda text: text,
+    )
+    tool = registry.get("echo")
+    assert tool.name == "echo"
+
+
+def test_tool_registry_duplicate_raises():
+    """Registering the same name twice raises ValueError."""
+    from core.tools import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register("dup", "desc", {}, lambda: None)
+
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register("dup", "desc", {}, lambda: None)
+
+
+def test_tool_registry_unknown_tool_raises():
+    """Getting an unregistered tool raises ValueError."""
+    from core.tools import ToolRegistry
+
+    registry = ToolRegistry()
+
+    with pytest.raises(ValueError, match="Unknown tool"):
+        registry.get("nonexistent")
+
+
+def test_tool_registry_list():
+    """list() returns the names of all registered tools."""
+    from core.tools import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register("a", "d", {}, lambda: None)
+    registry.register("b", "d", {}, lambda: None)
+
+    assert set(registry.list()) == {"a", "b"}
+
+
+def test_tool_execute_calls_function():
+    """Tool.execute() calls the underlying function with the provided args."""
+    from core.tools import Tool
+
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    tool = Tool(name="add", description="add two numbers", input_schema={}, function=add)
+    result = tool.execute({"x": 3, "y": 4})
+    assert result == 7
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: AgentAction unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_agent_action_from_dict_respond():
+    """from_dict correctly parses a respond action."""
+    from core.tools import AgentAction
+
+    action = AgentAction.from_dict({"action": "respond", "content": "Hello"})
+    assert action.action == "respond"
+    assert action.content == "Hello"
+    assert action.tool is None
+
+
+def test_agent_action_from_dict_tool():
+    """from_dict correctly parses a tool action."""
+    from core.tools import AgentAction
+
+    action = AgentAction.from_dict(
+        {"action": "tool", "tool": "read_file", "args": {"path": "/tmp/x"}}
+    )
+    assert action.action == "tool"
+    assert action.tool == "read_file"
+    assert action.args == {"path": "/tmp/x"}
+
+
+def test_agent_action_args_defaults_to_empty_dict():
+    """args defaults to {} when absent from the dict."""
+    from core.tools import AgentAction
+
+    action = AgentAction.from_dict({"action": "respond", "content": "hi"})
+    assert action.args == {}
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: ToolExecutor unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_executor_respond_action_returns_content():
+    """executor.execute() with action='respond' returns content directly."""
+    from core.tools import AgentAction, ToolExecutor, ToolRegistry
+
+    executor = ToolExecutor(ToolRegistry())
+    action = AgentAction(action="respond", content="Direct reply")
+    assert executor.execute(action) == "Direct reply"
+
+
+def test_executor_tool_action_executes_tool():
+    """executor.execute() with action='tool' calls the registered tool."""
+    from core.tools import AgentAction, ToolExecutor, ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register("upper", "uppercase text", {"text": "string"}, lambda text: text.upper())
+    executor = ToolExecutor(registry)
+    action = AgentAction(action="tool", tool="upper", args={"text": "hello"})
+    assert executor.execute(action) == "HELLO"
+
+
+def test_executor_unknown_action_raises():
+    """executor.execute() raises ValueError for an unrecognised action type."""
+    from core.tools import AgentAction, ToolExecutor, ToolRegistry
+
+    executor = ToolExecutor(ToolRegistry())
+    action = AgentAction(action="fly")
+
+    with pytest.raises(ValueError, match="Unknown action type"):
+        executor.execute(action)
+
+
+def test_executor_unknown_tool_raises():
+    """executor.execute() raises ValueError when the requested tool is not registered."""
+    from core.tools import AgentAction, ToolExecutor, ToolRegistry
+
+    executor = ToolExecutor(ToolRegistry())
+    action = AgentAction(action="tool", tool="ghost", args={})
+
+    with pytest.raises(ValueError, match="Unknown tool"):
+        executor.execute(action)
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: parse_agent_output unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_agent_output_valid_respond():
+    """parse_agent_output correctly parses a respond envelope."""
+    from core.tools import parse_agent_output
+
+    action = parse_agent_output('{"action": "respond", "content": "hi"}')
+    assert action.action == "respond"
+    assert action.content == "hi"
+
+
+def test_parse_agent_output_valid_tool():
+    """parse_agent_output correctly parses a tool envelope."""
+    from core.tools import parse_agent_output
+
+    action = parse_agent_output(
+        '{"action": "tool", "tool": "read_file", "args": {"path": "/tmp/f"}}'
+    )
+    assert action.action == "tool"
+    assert action.tool == "read_file"
+
+
+def test_parse_agent_output_invalid_json_raises():
+    """parse_agent_output raises on non-JSON input."""
+    import json
+
+    from core.tools import parse_agent_output
+
+    with pytest.raises(json.JSONDecodeError):
+        parse_agent_output("this is plain text")
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: Filesystem tool unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_filesystem_read_file_returns_content(tmp_path):
+    """read_file returns the text content of an existing file."""
+    from tools.filesystem import read_file
+
+    f = tmp_path / "sample.txt"
+    f.write_text("hello world")
+    assert read_file(str(f)) == "hello world"
+
+
+def test_filesystem_read_file_missing_returns_error_string():
+    """read_file returns an error string when the file does not exist."""
+    from tools.filesystem import read_file
+
+    result = read_file("/nonexistent/path/file.txt")
+    assert "File not found" in result
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: bootstrap_tools registration
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_tools_registers_read_file():
+    """bootstrap_tools.py registers the read_file tool at module load."""
+    from bootstrap_tools import tool_registry
+
+    assert "read_file" in tool_registry.list()
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: Worker prompt JSON instructions
+# ---------------------------------------------------------------------------
+
+
+def test_worker_execution_prompt_includes_json_instruction():
+    """execution prompt now includes JSON format instruction."""
+    from app.worker import _PROMPTS
+
+    prompt = _PROMPTS["execution"]
+    assert '"action"' in prompt
+    assert '"respond"' in prompt
+
+
+def test_worker_planning_prompt_includes_json_instruction():
+    """planning prompt includes JSON format instruction."""
+    from app.worker import _PROMPTS
+
+    assert '"action"' in _PROMPTS["planning"]
+
+
+def test_worker_analysis_prompt_includes_json_instruction():
+    """analysis prompt includes JSON format instruction."""
+    from app.worker import _PROMPTS
+
+    assert '"action"' in _PROMPTS["analysis"]
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0: /ingest with JSON agent output (integration)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_with_json_respond_action(mock_classify_execution):
+    """generate() returning a JSON respond envelope is correctly unwrapped."""
+    json_output = '{"action": "respond", "content": "The answer is 42."}'
+    with (
+        patch("app.main.classify", mock_classify_execution),
+        patch("app.main.generate", AsyncMock(return_value=json_output)),
+    ):
+        response = client.post("/ingest", json={"input": "What is the answer?"})
+
+    assert response.status_code == 200
+    assert response.json()["response"] == "The answer is 42."
+
+
+def test_ingest_with_tool_call_read_file(mock_classify_execution, tmp_path):
+    """generate() returning a tool call JSON causes the file to be read."""
+    test_file = tmp_path / "notes.txt"
+    test_file.write_text("important notes")
+    json_output = (
+        '{"action": "tool", "tool": "read_file", "args": {"path": "' + str(test_file) + '"}}'
+    )
+    with (
+        patch("app.main.classify", mock_classify_execution),
+        patch("app.main.generate", AsyncMock(return_value=json_output)),
+    ):
+        response = client.post("/ingest", json={"input": "Read my notes"})
+
+    assert response.status_code == 200
+    assert response.json()["response"] == "important notes"
+
+
+def test_ingest_plain_text_fallback(mock_classify_execution):
+    """generate() returning plain text (non-JSON) is returned as-is."""
+    with (
+        patch("app.main.classify", mock_classify_execution),
+        patch("app.main.generate", AsyncMock(return_value="Just some plain text")),
+    ):
+        response = client.post("/ingest", json={"input": "Tell me something"})
+
+    assert response.status_code == 200
+    assert response.json()["response"] == "Just some plain text"
+
+
+def test_ingest_unknown_tool_returns_failure_response(mock_classify_execution):
+    """Requesting an unregistered tool results in the worker failure response."""
+    json_output = '{"action": "tool", "tool": "nonexistent_tool", "args": {}}'
+    with (
+        patch("app.main.classify", mock_classify_execution),
+        patch("app.main.generate", AsyncMock(return_value=json_output)),
+    ):
+        response = client.post("/ingest", json={"input": "Do something"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "unable to process" in body["response"].lower() or "sorry" in body["response"].lower()
+
+
+def test_ingest_agent_selected_event_logged(caplog, mock_classify_execution, mock_worker_response):
+    """event=agent_selected is emitted when the worker is invoked."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="app.main"):
+        with (
+            patch("app.main.classify", mock_classify_execution),
+            patch("app.main.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Run a task"})
+
+    assert any("agent_selected" in r.message for r in caplog.records)
+
