@@ -2,6 +2,7 @@
 
 Exposes:
   POST /ingest                  — internal schema used by custom clients
+  GET  /v1/models               — OpenAI-compatible model list for OpenWebUI
   POST /v1/chat/completions     — OpenAI-compatible shim for OpenWebUI
   GET  /debug/routes            — development: inspect intent→handler routing table
 """
@@ -116,6 +117,22 @@ class _OAIChatRequest(BaseModel):
     model: str = "agentic"
     messages: list[_OAIMessage]
     stream: bool = False
+
+
+@app.get("/v1/models")
+async def list_models() -> dict:
+    """Return a minimal OpenAI-compatible model list so OpenWebUI can populate its dropdown."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "agentic",
+                "object": "model",
+                "created": 0,
+                "owned_by": "local",
+            }
+        ],
+    }
 
 
 @app.post("/v1/chat/completions")

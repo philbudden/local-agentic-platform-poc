@@ -251,6 +251,14 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
+def test_list_models_returns_agentic():
+    response = client.get("/v1/models")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert any(m["id"] == "agentic" for m in body["data"])
+
+
 # ---------------------------------------------------------------------------
 # Phase 2: intent-aware worker prompts
 # ---------------------------------------------------------------------------
