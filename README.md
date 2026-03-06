@@ -1,29 +1,30 @@
-# local-agentic-platform-poc
+# :brain: Cortex
 
-> **PoC — not production-ready.**
+> **This project is in Alpha - it may introduce breaking changes** | **This project is not production ready**
 
-## Why this exists
+**Cortex** is a local-first intelligent automation platform designed to turn natural language into reliable, structured system behaviour.
 
-Most "local AI" setups are one of two things: a raw Ollama endpoint with no orchestration, or a full agent framework (LangChain, AutoGen, CrewAI) with hidden abstractions, implicit memory, and non-deterministic routing.
+Rather than being a single model, service, or workflow engine, Cortex is an orchestration layer that connects language understanding, structured reasoning, and tool execution into a cohesive system. Its purpose is simple: allow humans to describe *what they want*, while Cortex determines *how to accomplish it* safely and deterministically.
 
-This project sits in between. It is a minimal, inspectable pipeline that routes user requests through two LLM calls — a classifier and a worker — with a pure Python router in between. Every decision is logged. Nothing is hidden.
+At its core, Cortex is built around a clear principle: **language should be an interface, not the system itself**.
 
-The goal is to understand what an agentic system actually does before adding complexity.
+Large language models are powerful interpreters of intent, but they are not inherently reliable decision engines. Cortex separates interpretation from execution, using structured routing, deterministic validation, and controlled tool interfaces to convert ambiguous human input into predictable outcomes.
 
----
+The platform is designed to run **locally and privately**, allowing individuals, engineers, and organisations to build intelligent systems without depending on external APIs or opaque infrastructure. Every component — from the language models to the orchestration layer — is intended to be deployable within environments you control.
 
-## How it differs from existing agent frameworks
+Over time, Cortex aims to evolve into a foundation for building intelligent software systems where:
 
-| Property | LangChain / AutoGen / CrewAI | This project |
-|---|---|---|
-| Routing | Semantic / LLM-driven | Deterministic dict lookup |
-| Memory | Built-in (optional) | None — each request is stateless |
-| Tool calling | First-class feature | Not implemented |
-| Observability | Varies | Structured logs, correlation IDs, latency on every request |
-| Model backend | Many | Ollama only |
-| Complexity | High | ~400 lines of application code |
+- Natural language becomes a **first-class interface**
+- Automation remains **transparent and debuggable**
+- AI behaviour is **observable and auditable**
+- Tools and services can be **safely composed and extended**
+- Systems remain **local-first, modular, and developer-friendly**
 
-The deliberate constraints are the point: no memory hand-waving, no agent magic, no implicit state. If something goes wrong, the logs tell you exactly what happened.
+The long-term vision of Cortex is to provide a platform where intelligent behaviour emerges from **clear architecture rather than prompt engineering** — enabling developers to build systems that are understandable, reliable, and adaptable as language models continue to evolve.
+
+In this model, Cortex is not the intelligence itself.
+
+It is the **cognitive layer** that allows intelligence, software, and real-world actions to work together.
 
 ---
 
