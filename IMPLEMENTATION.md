@@ -1,6 +1,6 @@
 # Implementation Description — Local Agentic Platform PoC
 
-> This document describes the current state of the implementation as of Phase 2 completion.
+> This document describes the current state of the implementation as of Phase 3 completion.
 > It is intended to be read as context by an LLM when planning future phases of the project.
 
 ---
@@ -53,7 +53,7 @@ These constraints were established in Phase 2 and must remain true:
 ```
 app/
   __init__.py       — empty package marker
-  main.py           — FastAPI app, /ingest endpoint, /v1/chat/completions shim, /health
+  main.py           — FastAPI app, /ingest endpoint, /v1/chat/completions shim, /debug/routes, /health
   models.py         — Pydantic schemas: ClassifierResponse, IngestRequest, IngestResponse
   classifier.py     — Classifier agent: deterministic prefix checks + LLM call to Ollama
   router.py         — Deterministic intent→handler mapping (pure Python dict lookup)
@@ -87,6 +87,7 @@ Pydantic `BaseSettings` subclass. All values are overridable via environment var
 | `max_tokens`          | `256`                                | `num_predict` passed to worker       |
 | `ingress_port`        | `8000`                               | Informational only (not used in code)|
 | `log_level`           | `INFO`                               | Python logging level                 |
+| `debug_router`        | `false`                              | When `true`, log classifier/worker prompts at DEBUG level |
 
 A singleton `settings` instance is imported by all modules.
 
@@ -207,16 +208,16 @@ The primary orchestration endpoint. Request: `IngestRequest`. Response: `IngestR
 
 Pipeline:
 
-1. `t_start = time.monotonic()`
-2. `classify(request.input)` → `ClassifierResponse`
-3. `route(classifier_result.intent)` → handler name (`"worker"` or `"clarify"`)
+1. Generate `request_id = uuid4().hex`; log `event=request_received`
+2. `classify(request.input, request_id)` → `ClassifierResponse`
+3. `route(classifier_result.intent, request_id, user_input, confidence)` → handler name
 4. If handler is `"clarify"`: set `response_text = _CLARIFY_RESPONSE` (no LLM call)
 5. If handler is `"worker"`:
-   - Call `generate(request.input, classifier_result.intent)`
-   - On `httpx.HTTPError`: log error, set `response_text = _WORKER_FAILURE_RESPONSE`,
+   - Call `generate(request.input, classifier_result.intent, request_id)`
+   - On `httpx.HTTPError`: log `event=worker_error`, set `response_text = _WORKER_FAILURE_RESPONSE`,
      overwrite classifier result to `intent="ambiguous", confidence=0.0`
-6. Log structured timing: `intent`, `confidence`, `classifier_latency_s`, `worker_latency_s`,
-   `total_latency_s`
+6. Log `event=request_complete` with `request_id`, `intent`, `confidence`,
+   `classifier_latency_ms`, `worker_latency_ms`, `total_latency_ms`
 7. Return `IngestResponse`
 
 **Static response strings:**
@@ -237,6 +238,11 @@ it to the `/ingest` logic. Wraps the result in a minimal ChatCompletion-shaped r
 If no user message is present or it is whitespace-only, returns the clarification response
 without calling ingest.
 
+#### `GET /debug/routes`
+
+Returns `{"routes": ROUTES}` — the live intent→handler mapping dict. Intended for development
+inspection and validating new intent additions.
+
 #### `GET /health`
 
 Returns `{"status": "ok"}`. Used for liveness checks.
@@ -248,7 +254,7 @@ Returns `{"status": "ok"}`. Used for liveness checks.
 All tests are in `tests/test_smoke.py`. They run against FastAPI's `TestClient` — no Docker
 or running Ollama required. Ollama calls are mocked via `unittest.mock.patch` and `AsyncMock`.
 
-The test suite covers (as of Phase 2):
+The test suite covers (as of Phase 3):
 
 | Category                          | Tests                                                              |
 |-----------------------------------|--------------------------------------------------------------------|
@@ -265,6 +271,10 @@ The test suite covers (as of Phase 2):
 |                                   | unknown intent uses fallback                                       |
 | Worker failure handling           | `ConnectError` and `TimeoutException` both return 200 with        |
 |                                   | `intent="ambiguous", confidence=0.0`                              |
+| Phase 3: observability            | `GET /debug/routes` returns ROUTES dict; router logs              |
+|                                   | `event=router_fallback` for unknown intents and                   |
+|                                   | `event=intent_router` for every decision; classifier logs         |
+|                                   | `event=classifier_result` for prefix-match hits                   |
 
 **Test runner:** `pytest tests/test_smoke.py -v`
 
@@ -307,7 +317,7 @@ OpenWebUI has `ENABLE_OLLAMA_API=false` to ensure it only uses the ingress shim.
 
 ---
 
-## What Has Been Done (Phase 1 + Phase 2)
+## What Has Been Done (Phase 1 + Phase 2 + Phase 3)
 
 - **Phase 1**: Skeleton FastAPI service, `/ingest` endpoint, classifier LLM call, deterministic
   router, basic worker LLM call, smoke tests, Docker/Compose setup, OpenWebUI integration.
@@ -316,6 +326,13 @@ OpenWebUI has `ENABLE_OLLAMA_API=false` to ensure it only uses the ingress shim.
   markdown fence stripping, retry-with-fallback), observability logging (per-request timing),
   graceful worker failure handling (HTTP errors and timeouts return 200 with failure envelope),
   expanded test suite covering all new behaviour.
+- **Phase 3**: Request correlation IDs (`request_id=uuid4().hex` generated per `/ingest` call,
+  passed through classify/route/generate), structured log events (`event=` prefix on all log
+  messages: `request_received`, `classifier_result`, `classifier_retry`, `classifier_latency`,
+  `classifier_raw_output`, `classifier_fallback`, `intent_router`, `router_fallback`,
+  `worker_start`, `worker_complete`, `request_complete`, `worker_error`), `DEBUG_ROUTER` env
+  var (logs classifier and worker prompts at DEBUG when `true`), `GET /debug/routes` endpoint
+  returning the live routing table, latency units changed from seconds to milliseconds.
 
 ---
 
