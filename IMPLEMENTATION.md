@@ -9,7 +9,7 @@
 
 COREtex is a **local agentic runtime platform** that routes user requests through a two-stage LLM pipeline (classifier → worker) using locally-hosted models via [Ollama](https://ollama.com), then passes the agent's JSON output through a deterministic tool execution layer.
 
-v0.3.0 restructures the codebase from a monolithic `app/` package into a **modular runtime** with three distinct layers: the `cortx/` runtime package (interfaces, registries, execution engine), `modules/` (pluggable component implementations), and `distributions/` (assembled applications).
+v0.3.0 restructures the codebase from a monolithic `app/` package into a **modular runtime** with three distinct layers: the `coretex/` runtime package (interfaces, registries, execution engine), `modules/` (pluggable component implementations), and `distributions/` (assembled applications).
 
 ---
 
@@ -32,7 +32,7 @@ User (browser)
 
 - **Ollama** runs on the host (not in Docker). Reached via `host.docker.internal:11434`.
 - **OpenWebUI** is a chat UI that talks to the ingress via the `/v1/chat/completions` shim.
-- **PipelineRunner** is the core orchestrator in `cortx/runtime/pipeline.py`. It accesses components through the module registry — never imports them directly.
+- **PipelineRunner** is the core orchestrator in `coretex/runtime/pipeline.py`. It accesses components through the module registry — never imports them directly.
 
 ---
 
@@ -47,14 +47,14 @@ User (browser)
 5. **Agents never execute tools directly** — only `ToolExecutor` can run tools
 6. **No autonomous planning loops**
 7. Worker prompts use string concatenation for user input — never `str.format()` or f-strings
-8. **Runtime (`cortx/`) never imports from `modules/`** — coupling is only through registry lookups
+8. **Runtime (`coretex/`) never imports from `modules/`** — coupling is only through registry lookups
 
 ---
 
 ## File Structure
 
 ```
-cortx/
+coretex/
   __init__.py
   interfaces/
     __init__.py
@@ -123,7 +123,7 @@ pytest.ini              — pythonpath = . so all package imports resolve withou
 
 ## Module Detail
 
-### `cortx/config/settings.py`
+### `coretex/config/settings.py`
 
 Pydantic `BaseSettings` subclass. All values overridable via environment variables or `.env` file.
 
@@ -142,7 +142,7 @@ Singleton `settings` imported by all modules.
 
 ---
 
-### `cortx/interfaces/`
+### `coretex/interfaces/`
 
 ABCs establishing contracts:
 
@@ -154,7 +154,7 @@ ABCs establishing contracts:
 
 ---
 
-### `cortx/registry/`
+### `coretex/registry/`
 
 - **`ToolRegistry`** — stores `Tool` dataclasses by name. `register()` raises `ValueError` on duplicates. `get()` raises `ValueError` for unknown tools (logs `event=tool_lookup_failed`). `list()` returns all names.
 - **`Tool`** — `@dataclass` with `name`, `description`, `input_schema`, `function`. `execute(args)` calls the function and logs `event=tool_execute` / `event=tool_execute_complete`.
@@ -162,7 +162,7 @@ ABCs establishing contracts:
 
 ---
 
-### `cortx/runtime/executor.py`
+### `coretex/runtime/executor.py`
 
 - **`AgentAction`** — typed wrapper for agent JSON output: `action`, `tool`, `args`, `content`. `from_dict()` is the primary constructor.
 - **`ToolExecutor`** — dispatches on `action.action`: `"respond"` returns `action.content` directly; `"tool"` looks up the tool and calls it; anything else raises `ValueError`.
@@ -170,7 +170,7 @@ ABCs establishing contracts:
 
 ---
 
-### `cortx/runtime/pipeline.py`
+### `coretex/runtime/pipeline.py`
 
 `PipelineRunner` wraps all three registries. `run(context: ExecutionContext) -> Tuple[str, str, float]` returns `(response_text, intent, confidence)`.
 
@@ -185,7 +185,7 @@ Pipeline:
 
 ---
 
-### `cortx/runtime/loader.py`
+### `coretex/runtime/loader.py`
 
 `ModuleLoader.load()` imports each module's `module.py` and calls `register(module_registry=..., tool_registry=..., model_registry=...)`. Called once at startup from `distributions/cortx_local/bootstrap.py`.
 
@@ -296,7 +296,7 @@ Async tests use `@pytest.mark.anyio`. All Ollama calls are mocked with `AsyncMoc
 - `modules.classifier_basic.classifier.ClassifierBasic.classify`
 - `modules.worker_llm.worker.WorkerLLM.generate`
 
-Mock fixtures return `ClassificationResult(intent=..., confidence=...)` from `cortx.interfaces.classifier`.
+Mock fixtures return `ClassificationResult(intent=..., confidence=...)` from `coretex.interfaces.classifier`.
 
 ---
 
@@ -306,7 +306,7 @@ Mock fixtures return `ClassificationResult(intent=..., confidence=...)` from `co
 
 - Base image: `python:3.11-slim`
 - Workdir: `/workspace`
-- Copies: `requirements.txt`, `cortx/`, `modules/`, `distributions/`
+- Copies: `requirements.txt`, `coretex/`, `modules/`, `distributions/`
 - Entry point: `uvicorn distributions.cortx_local.main:app --host 0.0.0.0 --port 8000`
 
 ### `docker-compose.yml`
@@ -319,7 +319,7 @@ Two services on an isolated `agentic` bridge network: `ingress` (port 8000) and 
 
 - **v0.1.x**: Skeleton FastAPI service, `/ingest`, classifier LLM call, deterministic router, basic worker LLM call, smoke tests, Docker/Compose setup, OpenWebUI integration.
 - **v0.2.x**: Intent-aware worker prompts, classifier hardening (prefix checks, alias normalisation, field-name scanning, markdown fence stripping, retry-with-fallback), graceful worker failure handling, request correlation IDs, structured log events, `DEBUG_ROUTER`, `GET /debug/routes`, tool execution layer, `read_file` tool, `bootstrap_tools.py`, updated worker prompts for JSON action envelopes, integrated executor into pipeline.
-- **v0.3.0**: Runtime extraction — `cortx/` package (interfaces, registries, executor, pipeline, loader, context, events, config); `modules/` (classifier_basic, router_simple, worker_llm, tools_filesystem, model_provider_ollama); `distributions/cortx_local/` (FastAPI app, models, bootstrap); updated Dockerfile; removed legacy `app/`, `core/`, `tools/`, `bootstrap_tools.py`; updated test suite for new import paths.
+- **v0.3.0**: Runtime extraction — `coretex/` package (interfaces, registries, executor, pipeline, loader, context, events, config); `modules/` (classifier_basic, router_simple, worker_llm, tools_filesystem, model_provider_ollama); `distributions/cortx_local/` (FastAPI app, models, bootstrap); updated Dockerfile; removed legacy `app/`, `core/`, `tools/`, `bootstrap_tools.py`; updated test suite for new import paths.
 
 ---
 

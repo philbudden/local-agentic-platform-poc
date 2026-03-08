@@ -39,7 +39,7 @@ Over time, CortX AI aims to evolve into a foundation for building intelligent so
 COREtex v0.3 is structured as a **runtime platform** with three layers:
 
 ```
-cortx/              ← Runtime platform
+coretex/              ← Runtime platform
   runtime/          ← Pipeline execution, executor, module loader, context, events
   interfaces/       ← ABCs: Classifier, Router, Worker, ModelProvider
   registry/         ← ToolRegistry, ModuleRegistry, ModelProviderRegistry, PipelineRegistry

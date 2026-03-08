@@ -5,9 +5,9 @@ Registers the ClassifierBasic instance with the module registry.
 
 from __future__ import annotations
 
-from cortx.registry.model_registry import ModelProviderRegistry
-from cortx.registry.module_registry import ModuleRegistry
-from cortx.registry.tool_registry import ToolRegistry
+from coretex.registry.model_registry import ModelProviderRegistry
+from coretex.registry.module_registry import ModuleRegistry
+from coretex.registry.tool_registry import ToolRegistry
 from modules.classifier_basic.classifier import ClassifierBasic
 
 

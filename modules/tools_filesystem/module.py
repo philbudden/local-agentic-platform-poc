@@ -5,9 +5,9 @@ Registers the read_file tool with the tool registry.
 
 from __future__ import annotations
 
-from cortx.registry.model_registry import ModelProviderRegistry
-from cortx.registry.module_registry import ModuleRegistry
-from cortx.registry.tool_registry import ToolRegistry
+from coretex.registry.model_registry import ModelProviderRegistry
+from coretex.registry.module_registry import ModuleRegistry
+from coretex.registry.tool_registry import ToolRegistry
 from modules.tools_filesystem.filesystem import read_file
 
 

@@ -15,9 +15,9 @@ import uuid
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from cortx.config.settings import settings
-from cortx.runtime.context import ExecutionContext
-from cortx.runtime.pipeline import PipelineRunner
+from coretex.config.settings import settings
+from coretex.runtime.context import ExecutionContext
+from coretex.runtime.pipeline import PipelineRunner
 from distributions.cortx_local.bootstrap import module_registry, tool_registry
 from distributions.cortx_local.models import IngestRequest, IngestResponse
 from modules.router_simple.router import ROUTES

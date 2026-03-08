@@ -5,7 +5,7 @@ WORKDIR /workspace
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY cortx/ ./cortx/
+COPY coretex/ ./coretex/
 COPY modules/ ./modules/
 COPY distributions/ ./distributions/
 

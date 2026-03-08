@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Dict
 
-from cortx.interfaces.classifier import Classifier
-from cortx.interfaces.router import Router
-from cortx.interfaces.worker import Worker
+from coretex.interfaces.classifier import Classifier
+from coretex.interfaces.router import Router
+from coretex.interfaces.worker import Worker
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from cortx.interfaces.classifier import ClassificationResult
+from coretex.interfaces.classifier import ClassificationResult
 from distributions.cortx_local.main import app
 from modules.router_simple.router import RouterSimple, ROUTES
 
@@ -431,7 +431,7 @@ async def test_classifier_result_logged_for_prefix_match(caplog):
 
 def test_tool_registry_register_and_get():
     """Registered tool is retrievable by name."""
-    from cortx.registry.tool_registry import ToolRegistry
+    from coretex.registry.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
     registry.register(
@@ -446,7 +446,7 @@ def test_tool_registry_register_and_get():
 
 def test_tool_registry_duplicate_raises():
     """Registering the same name twice raises ValueError."""
-    from cortx.registry.tool_registry import ToolRegistry
+    from coretex.registry.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
     registry.register("dup", "desc", {}, lambda: None)
@@ -457,7 +457,7 @@ def test_tool_registry_duplicate_raises():
 
 def test_tool_registry_unknown_tool_raises():
     """Getting an unregistered tool raises ValueError."""
-    from cortx.registry.tool_registry import ToolRegistry
+    from coretex.registry.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
 
@@ -467,7 +467,7 @@ def test_tool_registry_unknown_tool_raises():
 
 def test_tool_registry_list():
     """list() returns the names of all registered tools."""
-    from cortx.registry.tool_registry import ToolRegistry
+    from coretex.registry.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
     registry.register("a", "d", {}, lambda: None)
@@ -478,7 +478,7 @@ def test_tool_registry_list():
 
 def test_tool_execute_calls_function():
     """Tool.execute() calls the underlying function with the provided args."""
-    from cortx.registry.tool_registry import Tool
+    from coretex.registry.tool_registry import Tool
 
     def add(x: int, y: int) -> int:
         return x + y
@@ -495,7 +495,7 @@ def test_tool_execute_calls_function():
 
 def test_agent_action_from_dict_respond():
     """from_dict correctly parses a respond action."""
-    from cortx.runtime.executor import AgentAction
+    from coretex.runtime.executor import AgentAction
 
     action = AgentAction.from_dict({"action": "respond", "content": "Hello"})
     assert action.action == "respond"
@@ -505,7 +505,7 @@ def test_agent_action_from_dict_respond():
 
 def test_agent_action_from_dict_tool():
     """from_dict correctly parses a tool action."""
-    from cortx.runtime.executor import AgentAction
+    from coretex.runtime.executor import AgentAction
 
     action = AgentAction.from_dict(
         {"action": "tool", "tool": "read_file", "args": {"path": "/tmp/x"}}
@@ -517,7 +517,7 @@ def test_agent_action_from_dict_tool():
 
 def test_agent_action_args_defaults_to_empty_dict():
     """args defaults to {} when absent from the dict."""
-    from cortx.runtime.executor import AgentAction
+    from coretex.runtime.executor import AgentAction
 
     action = AgentAction.from_dict({"action": "respond", "content": "hi"})
     assert action.args == {}
@@ -530,8 +530,8 @@ def test_agent_action_args_defaults_to_empty_dict():
 
 def test_executor_respond_action_returns_content():
     """executor.execute() with action='respond' returns content directly."""
-    from cortx.registry.tool_registry import ToolRegistry
-    from cortx.runtime.executor import AgentAction, ToolExecutor
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
 
     executor = ToolExecutor(ToolRegistry())
     action = AgentAction(action="respond", content="Direct reply")
@@ -540,8 +540,8 @@ def test_executor_respond_action_returns_content():
 
 def test_executor_tool_action_executes_tool():
     """executor.execute() with action='tool' calls the registered tool."""
-    from cortx.registry.tool_registry import ToolRegistry
-    from cortx.runtime.executor import AgentAction, ToolExecutor
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
 
     registry = ToolRegistry()
     registry.register("upper", "uppercase text", {"text": "string"}, lambda text: text.upper())
@@ -552,8 +552,8 @@ def test_executor_tool_action_executes_tool():
 
 def test_executor_unknown_action_raises():
     """executor.execute() raises ValueError for an unrecognised action type."""
-    from cortx.registry.tool_registry import ToolRegistry
-    from cortx.runtime.executor import AgentAction, ToolExecutor
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
 
     executor = ToolExecutor(ToolRegistry())
     action = AgentAction(action="fly")
@@ -564,8 +564,8 @@ def test_executor_unknown_action_raises():
 
 def test_executor_unknown_tool_raises():
     """executor.execute() raises ValueError when the requested tool is not registered."""
-    from cortx.registry.tool_registry import ToolRegistry
-    from cortx.runtime.executor import AgentAction, ToolExecutor
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
 
     executor = ToolExecutor(ToolRegistry())
     action = AgentAction(action="tool", tool="ghost", args={})
@@ -581,7 +581,7 @@ def test_executor_unknown_tool_raises():
 
 def test_parse_agent_output_valid_respond():
     """parse_agent_output correctly parses a respond envelope."""
-    from cortx.runtime.executor import parse_agent_output
+    from coretex.runtime.executor import parse_agent_output
 
     action = parse_agent_output('{"action": "respond", "content": "hi"}')
     assert action.action == "respond"
@@ -590,7 +590,7 @@ def test_parse_agent_output_valid_respond():
 
 def test_parse_agent_output_valid_tool():
     """parse_agent_output correctly parses a tool envelope."""
-    from cortx.runtime.executor import parse_agent_output
+    from coretex.runtime.executor import parse_agent_output
 
     action = parse_agent_output(
         '{"action": "tool", "tool": "read_file", "args": {"path": "/tmp/f"}}'
@@ -603,7 +603,7 @@ def test_parse_agent_output_invalid_json_raises():
     """parse_agent_output raises on non-JSON input."""
     import json
 
-    from cortx.runtime.executor import parse_agent_output
+    from coretex.runtime.executor import parse_agent_output
 
     with pytest.raises(json.JSONDecodeError):
         parse_agent_output("this is plain text")
@@ -736,7 +736,7 @@ def test_ingest_agent_selected_event_logged(caplog, mock_classify_execution, moc
     """event=agent_selected is emitted when the worker is invoked."""
     import logging
 
-    with caplog.at_level(logging.INFO, logger="cortx.runtime.pipeline"):
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
         with (
             patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
             patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
@@ -748,7 +748,7 @@ def test_ingest_agent_selected_event_logged(caplog, mock_classify_execution, moc
 
 def test_ingest_unexpected_tool_exception_returns_200_failure(mock_classify_execution):
     """A tool function raising an unexpected exception must NOT produce a 500."""
-    from cortx.registry.tool_registry import Tool
+    from coretex.registry.tool_registry import Tool
     from distributions.cortx_local.bootstrap import tool_registry
 
     def _exploding_tool(**kwargs):

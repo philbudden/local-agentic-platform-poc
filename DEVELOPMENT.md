@@ -1,15 +1,15 @@
 # Development Guide
 
-This guide is written for developers who want to extend or modify CortX. It covers the v0.3.0 architecture, core components, and how to add new tools, routes, and modules.
+This guide is written for developers who want to extend or modify COREtex. It covers the v0.3.0 architecture, core components, and how to add new tools, routes, and modules.
 
 ---
 
 ## Architecture overview
 
-CortX v0.3.0 is a **runtime platform** composed of three distinct layers. The key architectural rule is: **the runtime never imports from modules**. All coupling goes through interfaces and registries.
+COREtex v0.3.0 is a **runtime platform** composed of three distinct layers. The key architectural rule is: **the runtime never imports from modules**. All coupling goes through interfaces and registries.
 
 ```
-cortx/              ← Runtime platform (never imports from modules/)
+coretex/              ← Runtime platform (never imports from modules/)
   runtime/          ← PipelineRunner, ToolExecutor, ModuleLoader, ExecutionContext, EventBus
   interfaces/       ← ABCs: Classifier, Router, Worker, ModelProvider
   registry/         ← ToolRegistry, ModuleRegistry, ModelProviderRegistry, PipelineRegistry
@@ -36,7 +36,7 @@ POST /ingest  (distributions/cortx_local/main.py)
     │  Creates ExecutionContext(request_id=uuid, input=...)
     │
     ▼
-PipelineRunner.run(context)  (cortx/runtime/pipeline.py)
+PipelineRunner.run(context)  (coretex/runtime/pipeline.py)
     │
     ├── module_registry.get_classifier("classifier_basic")
     │     ClassifierBasic.classify(input) → ClassificationResult(intent, confidence)
@@ -62,7 +62,7 @@ PipelineRunner.run(context)  (cortx/runtime/pipeline.py)
 ```
 
 **Key design rules:**
-- The runtime (`cortx/`) never imports from `modules/`. Access is through registry lookups.
+- The runtime (`coretex/`) never imports from `modules/`. Access is through registry lookups.
 - Agents (LLMs) never execute tools directly — only `ToolExecutor` can.
 - The router is pure Python — no LLM calls, no probabilistic decisions.
 - Each request is stateless — no memory, no conversation history.
@@ -73,7 +73,7 @@ PipelineRunner.run(context)  (cortx/runtime/pipeline.py)
 ## File structure
 
 ```
-cortx/
+coretex/
   __init__.py
   interfaces/
     __init__.py
@@ -142,7 +142,7 @@ pytest.ini              — sets pythonpath = . so imports resolve without insta
 
 ## Core components
 
-### `cortx/interfaces/`
+### `coretex/interfaces/`
 
 Abstract base classes defining what each component type must implement:
 
@@ -151,13 +151,13 @@ Abstract base classes defining what each component type must implement:
 - **`Worker`** — `generate(input: str, intent: str, **kwargs) -> str`.
 - **`ModelProvider`** — `complete(prompt: str, **kwargs) -> str`, `is_available() -> bool`.
 
-### `cortx/registry/`
+### `coretex/registry/`
 
 - **`ToolRegistry`** — stores `Tool` dataclasses by name. `register()`, `get()` (raises `KeyError` on missing), `list()`. Duplicate names raise `ValueError`.
 - **`ModuleRegistry`** — stores classifier/router/worker instances by name. `register_classifier()`, `get_classifier()`, etc.
 - **`ModelProviderRegistry`** — stores `ModelProvider` instances by name.
 
-### `cortx/runtime/executor.py`
+### `coretex/runtime/executor.py`
 
 The tool execution layer:
 
@@ -165,15 +165,15 @@ The tool execution layer:
 - **`ToolExecutor`** — dispatches on `action.action`: `"respond"` returns content; `"tool"` calls `ToolRegistry.get(name).execute(args)`.
 - **`parse_agent_output(raw)`** — parses raw JSON string → `AgentAction`. Raises `json.JSONDecodeError` on invalid input.
 
-### `cortx/runtime/pipeline.py`
+### `coretex/runtime/pipeline.py`
 
 `PipelineRunner.run(context: ExecutionContext) -> Tuple[str, str, float]` — the core orchestrator. Gets components from the module registry, never imports them directly. Returns `(response_text, intent, confidence)`.
 
-### `cortx/runtime/loader.py`
+### `coretex/runtime/loader.py`
 
 `ModuleLoader.load()` — discovers and loads all modules by calling their `register(module_registry, tool_registry, model_registry)` entry point. Each module self-registers its components.
 
-### `cortx/config/settings.py`
+### `coretex/config/settings.py`
 
 Pydantic `BaseSettings` — all values overridable via environment variable or `.env` file. Singleton `settings` imported by all modules.
 
@@ -318,7 +318,7 @@ def register(module_registry, tool_registry, model_registry):
     module_registry.register_classifier("my_classifier", MyClassifier())
 ```
 
-Then add it to `ModuleLoader.load()` in `cortx/runtime/loader.py`:
+Then add it to `ModuleLoader.load()` in `coretex/runtime/loader.py`:
 
 ```python
 import modules.my_module.module as my_module
@@ -351,7 +351,7 @@ All endpoints should return typed dicts or Pydantic models. Log the event at ent
 ## Design principles and constraints
 
 ### Runtime never imports modules
-The `cortx/` package must never import from `modules/`. This is the core architectural rule. All coupling goes through the registry lookup pattern: `module_registry.get_classifier("classifier_basic")`.
+The `coretex/` package must never import from `modules/`. This is the core architectural rule. All coupling goes through the registry lookup pattern: `module_registry.get_classifier("classifier_basic")`.
 
 ### Agents never execute tools directly
 `ToolExecutor` is the single point of tool execution. Never call a tool function directly from a worker or agent — always go through the executor.
@@ -368,7 +368,7 @@ Each request starts fresh. No session state, no conversation history, no shared 
 ### Worker prompt concatenation
 User input is always **appended** with `+`. Never use `str.format()` or f-strings with user input — user-supplied `{braces}` cause `KeyError`.
 
-### Settings via `cortx/config/settings.py`
+### Settings via `coretex/config/settings.py`
 All configurable values live in `Settings(BaseSettings)`. Never hardcode URLs, model names, timeouts, or token limits inline.
 
 ### Graceful failure over 5xx
@@ -421,7 +421,7 @@ All tests mock Ollama. No running services are required.
 
 ## Architecture overview
 
-CortX is a FastAPI service that acts as an orchestration layer between a user interface, a set of local LLMs (via Ollama), and a tool execution layer.
+COREtex is a FastAPI service that acts as an orchestration layer between a user interface, a set of local LLMs (via Ollama), and a tool execution layer.
 
 ```
 User input

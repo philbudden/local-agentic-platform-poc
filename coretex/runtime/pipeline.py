@@ -14,10 +14,10 @@ from typing import Tuple
 
 import httpx
 
-from cortx.registry.module_registry import ModuleRegistry
-from cortx.registry.tool_registry import ToolRegistry
-from cortx.runtime.context import ExecutionContext
-from cortx.runtime.executor import ToolExecutor, parse_agent_output
+from coretex.registry.module_registry import ModuleRegistry
+from coretex.registry.tool_registry import ToolRegistry
+from coretex.runtime.context import ExecutionContext
+from coretex.runtime.executor import ToolExecutor, parse_agent_output
 
 logger = logging.getLogger(__name__)
 

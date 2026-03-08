@@ -1,6 +1,6 @@
 # Testing Guide
 
-This guide explains how to verify that all features of CortX are working correctly — from the tool execution layer through to the full end-to-end pipeline.
+This guide explains how to verify that all features of COREtex are working correctly — from the tool execution layer through to the full end-to-end pipeline.
 
 ---
 
@@ -140,17 +140,17 @@ Expected: `intent` = `"execution"`, `source=prefix_match` in logs (no LLM call f
 Create a test file on the **host**, then send a request that instructs the agent to read it.
 
 ```bash
-echo "This is my test file content." > /tmp/cortx_test.txt
+echo "This is my test file content." > /tmp/coretex_test.txt
 ```
 
-> **Docker:** `docker-compose.yml` mounts the host's `/tmp` directory into the container read-only, so `/tmp/cortx_test.txt` is accessible inside the container. Create the file on the host **before** sending the request — no container restart required.
+> **Docker:** `docker-compose.yml` mounts the host's `/tmp` directory into the container read-only, so `/tmp/coretex_test.txt` is accessible inside the container. Create the file on the host **before** sending the request — no container restart required.
 >
 > **Local (uvicorn):** The file is read directly from the host filesystem; no extra setup needed.
 
 ```bash
 curl -s -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
-  -d '{"input": "Read the file at /tmp/cortx_test.txt and tell me what it says"}' \
+  -d '{"input": "Read the file at /tmp/coretex_test.txt and tell me what it says"}' \
   | python3 -m json.tool
 ```
 
@@ -162,7 +162,7 @@ Expected: the response contains `"This is my test file content."`.
 
 ```python
 from distributions.cortx_local.bootstrap import tool_registry
-from cortx.runtime.executor import ToolExecutor, AgentAction, parse_agent_output
+from coretex.runtime.executor import ToolExecutor, AgentAction, parse_agent_output
 
 executor = ToolExecutor(tool_registry)
 
@@ -183,7 +183,7 @@ print(executor.execute(action))  # → "file content here"
 
 ```python
 from distributions.cortx_local.bootstrap import tool_registry
-from cortx.runtime.executor import AgentAction, ToolExecutor
+from coretex.runtime.executor import AgentAction, ToolExecutor
 
 executor = ToolExecutor(tool_registry)
 action = AgentAction(action="tool", tool="read_file", args={"path": "/nonexistent/file.txt"})
@@ -250,7 +250,7 @@ curl http://localhost:8000/health
 Ensure the Python path is set correctly. The `pytest.ini` file sets `pythonpath = .` which makes the project root importable. Run pytest from the project root:
 
 ```bash
-cd /path/to/cortxai/COREtex
+cd /path/to/COREtexai/COREtex
 pytest tests/test_smoke.py -v
 ```
 
@@ -395,17 +395,17 @@ Expected: `intent` = `"execution"`, `source=prefix_match` in logs (no LLM call f
 Create a test file on the **host**, then send a request that instructs the agent to read it.
 
 ```bash
-echo "This is my test file content." > /tmp/cortx_test.txt
+echo "This is my test file content." > /tmp/coretex_test.txt
 ```
 
-> **Docker:** `docker-compose.yml` mounts the host's `/tmp` directory into the container read-only, so `/tmp/cortx_test.txt` is accessible inside the container. Create the file on the host **before** sending the request — no container restart required.
+> **Docker:** `docker-compose.yml` mounts the host's `/tmp` directory into the container read-only, so `/tmp/coretex_test.txt` is accessible inside the container. Create the file on the host **before** sending the request — no container restart required.
 >
 > **Local (uvicorn):** The file is read directly from the host filesystem; no extra setup needed.
 
 ```bash
 curl -s -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
-  -d '{"input": "Read the file at /tmp/cortx_test.txt and tell me what it says"}' \
+  -d '{"input": "Read the file at /tmp/coretex_test.txt and tell me what it says"}' \
   | python3 -m json.tool
 ```
 
@@ -505,7 +505,7 @@ curl http://localhost:8000/health
 Ensure the Python path is set correctly. The `pytest.ini` file sets `pythonpath = .` which makes the project root importable. Run pytest from the project root:
 
 ```bash
-cd /path/to/cortx
+cd /path/to/COREtex
 pytest tests/test_smoke.py -v
 ```
 

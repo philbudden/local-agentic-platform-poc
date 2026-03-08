@@ -15,8 +15,8 @@ import httpx
 from pydantic import BaseModel, ValidationError
 from typing import Literal
 
-from cortx.config.settings import settings
-from cortx.interfaces.classifier import ClassificationResult, Classifier
+from coretex.config.settings import settings
+from coretex.interfaces.classifier import ClassificationResult, Classifier
 
 logger = logging.getLogger(__name__)
 

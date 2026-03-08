@@ -11,8 +11,8 @@ import time
 
 import httpx
 
-from cortx.config.settings import settings
-from cortx.interfaces.worker import Worker
+from coretex.config.settings import settings
+from coretex.interfaces.worker import Worker
 
 logger = logging.getLogger(__name__)
 

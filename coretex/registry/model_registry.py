@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Dict
 
-from cortx.interfaces.model_provider import ModelProvider
+from coretex.interfaces.model_provider import ModelProvider
 
 logger = logging.getLogger(__name__)
 

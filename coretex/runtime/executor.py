@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from cortx.registry.tool_registry import ToolRegistry
+from coretex.registry.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 

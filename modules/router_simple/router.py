@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from cortx.interfaces.router import Router
+from coretex.interfaces.router import Router
 
 logger = logging.getLogger(__name__)
 

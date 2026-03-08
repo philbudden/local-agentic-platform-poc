@@ -6,9 +6,9 @@ import importlib
 import logging
 from typing import Optional
 
-from cortx.registry.model_registry import ModelProviderRegistry
-from cortx.registry.module_registry import ModuleRegistry
-from cortx.registry.tool_registry import ToolRegistry
+from coretex.registry.model_registry import ModelProviderRegistry
+from coretex.registry.module_registry import ModuleRegistry
+from coretex.registry.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 

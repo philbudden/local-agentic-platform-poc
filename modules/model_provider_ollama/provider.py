@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 
 import httpx
 
-from cortx.config.settings import settings
-from cortx.interfaces.model_provider import ModelProvider
+from coretex.config.settings import settings
+from coretex.interfaces.model_provider import ModelProvider
 
 logger = logging.getLogger(__name__)
 
