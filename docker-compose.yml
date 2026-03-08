@@ -14,10 +14,11 @@ services:
       - MAX_TOKENS=${MAX_TOKENS:-256}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG_ROUTER=${DEBUG_ROUTER:-false}
+    volumes:
+      # Mount host /tmp read-only so the read_file tool can access files created
+      # on the host (e.g. /tmp/cortx_test.txt from the testing guide).
+      - /tmp:/tmp:ro
     extra_hosts:
-      # Allows the container to reach Ollama running on the host.
-      # Works automatically on Docker Desktop (Mac/Windows).
-      # On Linux, requires Docker 20.10+ (host-gateway is resolved automatically).
       - "host.docker.internal:host-gateway"
     networks:
       - agentic
@@ -29,12 +30,9 @@ services:
     ports:
       - "3000:8080"
     environment:
-      # Point OpenWebUI at our Ingress API instead of a real OpenAI endpoint.
       - OPENAI_API_BASE_URL=http://ingress:8000/v1
       - OPENAI_API_KEY=not-used
-      # Disable Ollama's built-in connection so only the shim is used.
       - ENABLE_OLLAMA_API=false
-      # Restrict CORS to the local UI origin instead of the default wildcard.
       - CORS_ALLOW_ORIGIN=http://localhost:3000
     depends_on:
       - ingress

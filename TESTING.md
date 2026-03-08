@@ -137,11 +137,17 @@ Expected: `intent` = `"execution"`, `source=prefix_match` in logs (no LLM call f
 
 ### Read a local file via the tool
 
-Create a test file, then send a request that instructs the agent to read it.
+Create a test file on the **host**, then send a request that instructs the agent to read it.
 
 ```bash
 echo "This is my test file content." > /tmp/cortx_test.txt
+```
 
+> **Docker:** `docker-compose.yml` mounts the host's `/tmp` directory into the container read-only, so `/tmp/cortx_test.txt` is accessible inside the container. Create the file on the host **before** sending the request — no container restart required.
+>
+> **Local (uvicorn):** The file is read directly from the host filesystem; no extra setup needed.
+
+```bash
 curl -s -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
   -d '{"input": "Read the file at /tmp/cortx_test.txt and tell me what it says"}' \
@@ -150,7 +156,7 @@ curl -s -X POST http://localhost:8000/ingest \
 
 Expected: the response contains `"This is my test file content."`.
 
-> **Note:** Whether the LLM produces a tool-call JSON or a direct response depends on model behaviour. A well-prompted model with a recent instruction-following model (llama3.2:3b or better) should emit the tool call. If it does not, the response will contain the model's best guess without file access.
+> **Note:** Whether the LLM produces a tool-call JSON or a direct response depends on model behaviour. A well-prompted model (llama3.2:3b or better) should emit the tool call. If it does not, the response will contain the model's best guess without file access.
 
 ### Directly test the tool execution layer (Python REPL)
 

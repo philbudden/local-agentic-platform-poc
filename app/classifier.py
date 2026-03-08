@@ -175,7 +175,7 @@ async def classify(user_input: str, request_id: str = "") -> ClassifierResponse:
     for attempt in range(2):
         try:
             raw = await _call_ollama(user_input, request_id)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.RequestError) as exc:
             body = ""
             if hasattr(exc, "response") and exc.response is not None:
                 try:

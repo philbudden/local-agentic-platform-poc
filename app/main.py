@@ -87,7 +87,7 @@ async def ingest(request: IngestRequest) -> IngestResponse:
                     request_id, type(exc).__name__, str(exc),
                 )
                 response_text = _WORKER_FAILURE_RESPONSE
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.RequestError) as exc:
             status = getattr(exc.response, "status_code", "N/A") if hasattr(exc, "response") else "N/A"
             body = ""
             if hasattr(exc, "response") and exc.response is not None:
