@@ -1,18 +1,18 @@
-# :brain: CortX AI
+# :brain: COREtex
 
 > **This project is in Alpha - it may introduce breaking changes** | **This project is not production ready**
 
-**CortX** is a local-first intelligent automation platform designed to turn natural language into reliable, structured system behaviour.
+**CortX AI** is a local-first intelligent automation platform designed to turn natural language into reliable, structured system behaviour.
 
-Rather than being a single model, service, or workflow engine, CortX is an orchestration layer that connects language understanding, structured reasoning, and tool execution into a cohesive system. Its purpose is simple: allow humans to describe *what they want*, while CortX determines *how to accomplish it* safely and deterministically.
+Rather than being a single model, service, or workflow engine, CortX is an orchestration layer that connects language understanding, structured reasoning, and tool execution into a cohesive system. Its purpose is simple: allow humans to describe *what they want*, while CortX AI determines *how to accomplish it* safely and deterministically.
 
-At its core, CortX is built around a clear principle: **language should be an interface, not the system itself**.
+At its core, CortX AI is built around a clear principle: **language should be an interface, not the system itself**.
 
-Large language models are powerful interpreters of intent, but they are not inherently reliable decision engines. CortX separates interpretation from execution, using structured routing, deterministic validation, and controlled tool interfaces to convert ambiguous human input into predictable outcomes.
+Large language models are powerful interpreters of intent, but they are not inherently reliable decision engines. CortX AI separates interpretation from execution, using structured routing, deterministic validation, and controlled tool interfaces to convert ambiguous human input into predictable outcomes.
 
 The platform is designed to run **locally and privately**, allowing individuals, engineers, and organisations to build intelligent systems without depending on external APIs or opaque infrastructure. Every component — from the language models to the orchestration layer — is intended to be deployable within environments you control.
 
-Over time, CortX aims to evolve into a foundation for building intelligent software systems where:
+Over time, CortX AI aims to evolve into a foundation for building intelligent software systems where:
 
 - Natural language becomes a **first-class interface**
 - Automation remains **transparent and debuggable**
@@ -22,7 +22,7 @@ Over time, CortX aims to evolve into a foundation for building intelligent softw
 
 ---
 
-## What CortX can do today (v0.2.0)
+## What CortX AI can do today (v0.3.0)
 
 - **Understand intent** — classifies every request as `execution`, `planning`, `analysis`, or `ambiguous` using a local LLM, with deterministic prefix checks for common patterns.
 - **Route deterministically** — maps intent to the correct execution path using a pure Python dict, not another LLM.
@@ -30,17 +30,40 @@ Over time, CortX aims to evolve into a foundation for building intelligent softw
 - **Execute tools** — agents return structured JSON specifying either a direct reply or a tool to run; the ToolExecutor carries out the action safely.
 - **Read files** — the built-in `read_file` tool reads any local file by path and returns its contents.
 - **Observe everything** — every request gets a unique ID; every step emits a structured log event.
+- **Load components as modules** — classifiers, routers, workers, and tools are registered dynamically at startup via the module loader.
 
 ---
 
-## Architecture
+## Architecture (v0.3.0)
+
+COREtex v0.3 is structured as a **runtime platform** with three layers:
+
+```
+cortx/              ← Runtime platform
+  runtime/          ← Pipeline execution, executor, module loader, context, events
+  interfaces/       ← ABCs: Classifier, Router, Worker, ModelProvider
+  registry/         ← ToolRegistry, ModuleRegistry, ModelProviderRegistry, PipelineRegistry
+  config/           ← Settings
+
+modules/            ← Components implementing interfaces, registered at startup
+  classifier_basic/ ← Intent classifier (prefix checks + LLM)
+  router_simple/    ← Deterministic dict-based router
+  worker_llm/       ← LLM response generator
+  tools_filesystem/ ← read_file tool
+  model_provider_ollama/ ← Ollama inference backend
+
+distributions/
+  cortx_local/      ← FastAPI ingress + OpenWebUI integration
+```
+
+### Request pipeline
 
 ```
 User (browser)
   └─► OpenWebUI  (port 3000)
-        └─► POST /v1/chat/completions  (Ingress API, port 8000)
-              └─► POST /ingest  (internal orchestration)
-                    ├─► Classifier  — LLM call 1/2 → intent + confidence
+        └─► POST /v1/chat/completions  (cortx_local, port 8000)
+              └─► POST /ingest  (internal orchestration via PipelineRunner)
+                    ├─► Classifier  — LLM call 1/2 → ClassificationResult
                     ├─► Router      — pure Python dict lookup → handler
                     └─► Worker      — LLM call 2/2 → JSON action envelope
                                          │
@@ -72,7 +95,7 @@ Agents (the worker LLM) must return strict JSON. Two formats are supported:
 {"action": "tool", "tool": "read_file", "args": {"path": "notes.md"}}
 ```
 
-If the LLM returns plain text instead of JSON, CortX gracefully falls back to treating it as a direct response.
+If the LLM returns plain text instead of JSON, COREtex gracefully falls back to treating it as a direct response.
 
 ---
 
@@ -100,7 +123,7 @@ curl -X POST http://localhost:8000/ingest \
   -d '{"input": "Compare Kubernetes and Nomad"}'
 # → {"intent":"analysis","confidence":0.9,"response":"..."}
 
-# 4. Request file reading via tool call (the worker will emit tool JSON if prompted)
+# 4. Request file reading via tool call
 curl -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
   -d '{"input": "Read the file /etc/hostname"}'
@@ -181,8 +204,6 @@ event=tool_result           tool=read_file result_type=str
 event=request_complete      request_id=<id> intent=execution confidence=0.95 total_latency_ms=2350
 ```
 
-For inputs matching a prefix (`Write...`, `How do I...`) the classifier short-circuits — no `llm_call 1/2` appears, and `source=prefix_match`.
-
 **Enable prompt logging:**
 ```bash
 DEBUG_ROUTER=true LOG_LEVEL=DEBUG docker compose up --build
@@ -193,4 +214,3 @@ DEBUG_ROUTER=true LOG_LEVEL=DEBUG docker compose up --build
 curl http://localhost:8000/debug/routes
 # → {"routes":{"execution":"worker","planning":"worker","analysis":"worker","ambiguous":"clarify"}}
 ```
-
