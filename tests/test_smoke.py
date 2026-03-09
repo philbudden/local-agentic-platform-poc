@@ -815,3 +815,684 @@ def test_ingest_tool_execution_logs_carry_request_id(caplog, mock_classify_execu
         "tool_execute events do not carry request_id"
     )
 
+
+# ---------------------------------------------------------------------------
+# Section 4.1 — Registry duplicate and unknown-lookup tests
+# ---------------------------------------------------------------------------
+
+
+def test_module_registry_duplicate_classifier_raises():
+    """Registering the same classifier name twice raises ValueError."""
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.interfaces.classifier import Classifier, ClassificationResult
+
+    class _Dummy(Classifier):
+        async def classify(self, text: str, request_id: str = "") -> ClassificationResult:
+            return ClassificationResult(intent="execution", confidence=1.0)
+
+    registry = ModuleRegistry()
+    registry.register_classifier("dup", _Dummy())
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register_classifier("dup", _Dummy())
+
+
+def test_module_registry_duplicate_router_raises():
+    """Registering the same router name twice raises ValueError."""
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.interfaces.router import Router
+
+    class _Dummy(Router):
+        def route(self, intent: str, **kwargs: object) -> str:
+            return "worker"
+
+    registry = ModuleRegistry()
+    registry.register_router("dup", _Dummy())
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register_router("dup", _Dummy())
+
+
+def test_module_registry_duplicate_worker_raises():
+    """Registering the same worker name twice raises ValueError."""
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.interfaces.worker import Worker
+
+    class _Dummy(Worker):
+        async def generate(self, text: str, intent: str = "", request_id: str = "") -> str:
+            return "result"
+
+    registry = ModuleRegistry()
+    registry.register_worker("dup", _Dummy())
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register_worker("dup", _Dummy())
+
+
+def test_module_registry_unknown_classifier_raises():
+    """Getting an unregistered classifier raises ValueError."""
+    from coretex.registry.module_registry import ModuleRegistry
+
+    registry = ModuleRegistry()
+    with pytest.raises(ValueError, match="Unknown component"):
+        registry.get_classifier("nonexistent")
+
+
+def test_module_registry_unknown_router_raises():
+    """Getting an unregistered router raises ValueError."""
+    from coretex.registry.module_registry import ModuleRegistry
+
+    registry = ModuleRegistry()
+    with pytest.raises(ValueError, match="Unknown component"):
+        registry.get_router("nonexistent")
+
+
+def test_module_registry_unknown_worker_raises():
+    """Getting an unregistered worker raises ValueError."""
+    from coretex.registry.module_registry import ModuleRegistry
+
+    registry = ModuleRegistry()
+    with pytest.raises(ValueError, match="Unknown component"):
+        registry.get_worker("nonexistent")
+
+
+def test_module_registry_unknown_classifier_logs_lookup_failed(caplog):
+    """get_classifier() emits event=registry_lookup_failed for unknown name."""
+    import logging
+    from coretex.registry.module_registry import ModuleRegistry
+
+    registry = ModuleRegistry()
+    with caplog.at_level(logging.ERROR, logger="coretex.registry.module_registry"):
+        with pytest.raises(ValueError):
+            registry.get_classifier("ghost")
+    assert any("registry_lookup_failed" in r.message for r in caplog.records)
+
+
+def test_model_registry_duplicate_raises():
+    """Registering the same model provider twice raises ValueError."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+    from coretex.interfaces.model_provider import ModelProvider
+
+    class _Dummy(ModelProvider):
+        async def generate(self, prompt: str, **kwargs: object) -> str:
+            return ""
+        async def chat(self, messages: list, **kwargs: object) -> str:
+            return ""
+
+    registry = ModelProviderRegistry()
+    registry.register("dup", _Dummy())
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register("dup", _Dummy())
+
+
+def test_model_registry_unknown_raises():
+    """Getting an unregistered model provider raises ValueError."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+
+    registry = ModelProviderRegistry()
+    with pytest.raises(ValueError, match="Unknown component"):
+        registry.get("nonexistent")
+
+
+def test_model_registry_unknown_logs_lookup_failed(caplog):
+    """get() emits event=registry_lookup_failed for unknown model provider."""
+    import logging
+    from coretex.registry.model_registry import ModelProviderRegistry
+
+    registry = ModelProviderRegistry()
+    with caplog.at_level(logging.ERROR, logger="coretex.registry.model_registry"):
+        with pytest.raises(ValueError):
+            registry.get("ghost")
+    assert any("registry_lookup_failed" in r.message for r in caplog.records)
+
+
+def test_pipeline_registry_duplicate_raises():
+    """Registering the same pipeline name twice raises ValueError."""
+    from coretex.registry.pipeline_registry import PipelineRegistry
+
+    registry = PipelineRegistry()
+    registry.register("dup", object())
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register("dup", object())
+
+
+def test_pipeline_registry_unknown_raises():
+    """Getting an unregistered pipeline raises ValueError."""
+    from coretex.registry.pipeline_registry import PipelineRegistry
+
+    registry = PipelineRegistry()
+    with pytest.raises(ValueError, match="Unknown component"):
+        registry.get("nonexistent")
+
+
+def test_tool_registry_lookup_failed_log(caplog):
+    """get() emits event=registry_lookup_failed for unknown tool."""
+    import logging
+    from coretex.registry.tool_registry import ToolRegistry
+
+    registry = ToolRegistry()
+    with caplog.at_level(logging.ERROR, logger="coretex.registry.tool_registry"):
+        with pytest.raises(ValueError):
+            registry.get("ghost")
+    assert any("registry_lookup_failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Section 4.2 — ModuleLoader validation tests
+# ---------------------------------------------------------------------------
+
+
+def test_module_loader_loads_valid_module(tmp_path, monkeypatch):
+    """ModuleLoader.load() successfully registers a module with a valid register()."""
+    import sys
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mod_dir = tmp_path / "mymod"
+    mod_dir.mkdir()
+    (mod_dir / "__init__.py").write_text("")
+    (mod_dir / "module.py").write_text(
+        "def register(module_registry, tool_registry, model_registry):\n"
+        "    tool_registry.register('test_tool', 'desc', {}, lambda: 'ok')\n"
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+    loader.load("mymod.module")
+
+    assert "test_tool" in tr.list()
+    assert "mymod.module" in mr.list_loaded()
+
+
+def test_module_loader_missing_register_raises(tmp_path, monkeypatch):
+    """ModuleLoader.load() raises ValueError when module has no register() function."""
+    import sys
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mod_dir = tmp_path / "noregmod"
+    mod_dir.mkdir()
+    (mod_dir / "__init__.py").write_text("")
+    (mod_dir / "module.py").write_text("# no register function\n")
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+
+    with pytest.raises(ValueError, match="no register\\(\\)"):
+        loader.load("noregmod.module")
+
+
+def test_module_loader_wrong_signature_raises(tmp_path, monkeypatch):
+    """ModuleLoader.load() raises ValueError when register() has wrong signature."""
+    import sys
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mod_dir = tmp_path / "badsigmod"
+    mod_dir.mkdir()
+    (mod_dir / "__init__.py").write_text("")
+    (mod_dir / "module.py").write_text("def register(foo, bar):\n    pass\n")
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+
+    with pytest.raises(ValueError, match="Invalid module register\\(\\) signature"):
+        loader.load("badsigmod.module")
+
+
+def test_module_loader_empty_registration_logs_warning(tmp_path, monkeypatch, caplog):
+    """ModuleLoader.load() emits a warning when module registers no components."""
+    import logging
+    import sys
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mod_dir = tmp_path / "emptymod"
+    mod_dir.mkdir()
+    (mod_dir / "__init__.py").write_text("")
+    (mod_dir / "module.py").write_text(
+        "def register(module_registry, tool_registry, model_registry):\n    pass\n"
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+
+    with caplog.at_level(logging.WARNING, logger="coretex.runtime.loader"):
+        loader.load("emptymod.module")
+
+    assert any("module_registered_nothing" in r.message for r in caplog.records)
+
+
+def test_module_loader_import_error_raises(tmp_path, monkeypatch):
+    """ModuleLoader.load() raises ImportError for a non-existent module path."""
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+
+    with pytest.raises(ImportError):
+        loader.load("definitely.does.not.exist")
+
+
+def test_module_loader_load_all_emits_lifecycle_logs(tmp_path, monkeypatch, caplog):
+    """load_all() emits module_loading_start and module_loading_complete events."""
+    import logging
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mod_dir = tmp_path / "liftmod"
+    mod_dir.mkdir()
+    (mod_dir / "__init__.py").write_text("")
+    (mod_dir / "module.py").write_text(
+        "def register(module_registry, tool_registry, model_registry):\n    pass\n"
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.loader"):
+        loader.load_all(["liftmod.module"])
+
+    messages = [r.message for r in caplog.records]
+    assert any("module_loading_start" in m for m in messages)
+    assert any("module_loading_complete" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# Section 4.3 — ToolExecutor additional tests
+# ---------------------------------------------------------------------------
+
+
+def test_executor_tool_action_missing_tool_name_raises():
+    """execute() raises ValueError when action='tool' but tool name is absent."""
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
+
+    executor = ToolExecutor(ToolRegistry())
+    action = AgentAction(action="tool", tool=None, args={})
+
+    with pytest.raises(ValueError):
+        executor.execute(action)
+
+
+def test_executor_respond_action_none_content_returns_none():
+    """execute() with action='respond' and content=None returns None."""
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
+
+    executor = ToolExecutor(ToolRegistry())
+    action = AgentAction(action="respond", content=None)
+    assert executor.execute(action) is None
+
+
+def test_executor_tool_runtime_exception_propagates():
+    """A tool function raising an exception causes execute() to propagate it."""
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.executor import AgentAction, ToolExecutor
+
+    registry = ToolRegistry()
+    registry.register("boom", "explodes", {}, lambda: (_ for _ in ()).throw(RuntimeError("kaboom")))
+    executor = ToolExecutor(registry)
+    action = AgentAction(action="tool", tool="boom", args={})
+
+    with pytest.raises(RuntimeError, match="kaboom"):
+        executor.execute(action)
+
+
+# ---------------------------------------------------------------------------
+# Section 4.4 — Pipeline failure tests (mock scenarios)
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_classifier_http_failure_returns_clarification():
+    """Classifier HTTP failure falls back to intent=ambiguous and clarification response."""
+    import httpx
+    with patch(
+        "modules.classifier_basic.classifier.ClassifierBasic.classify",
+        side_effect=httpx.ConnectError("refused"),
+    ):
+        response = client.post("/ingest", json={"input": "Do something"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "ambiguous"
+    assert body["confidence"] == 0.0
+
+
+def test_pipeline_worker_http_failure_returns_graceful_response():
+    """Worker HTTP failure returns 200 with failure response."""
+    import httpx
+    mock_classify = AsyncMock(
+        return_value=__import__(
+            "coretex.interfaces.classifier",
+            fromlist=["ClassificationResult"],
+        ).ClassificationResult(intent="execution", confidence=0.9)
+    )
+    with (
+        patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify),
+        patch(
+            "modules.worker_llm.worker.WorkerLLM.generate",
+            side_effect=httpx.HTTPStatusError("error", request=None, response=None),
+        ),
+    ):
+        response = client.post("/ingest", json={"input": "Do something"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "ambiguous"
+    assert len(body["response"]) > 0
+
+
+def test_pipeline_invalid_json_output_treated_as_plain_text(mock_classify_execution):
+    """Worker returning plain text (non-JSON) is returned as-is without 500."""
+    with (
+        patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+        patch(
+            "modules.worker_llm.worker.WorkerLLM.generate",
+            AsyncMock(return_value="This is plain text output"),
+        ),
+    ):
+        response = client.post("/ingest", json={"input": "Tell me something"})
+
+    assert response.status_code == 200
+    assert response.json()["response"] == "This is plain text output"
+
+
+def test_pipeline_tool_lookup_failure_returns_worker_failure(mock_classify_execution):
+    """Requesting an unregistered tool results in the worker failure response."""
+    json_output = '{"action": "tool", "tool": "nonexistent_tool", "args": {}}'
+    with (
+        patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+        patch("modules.worker_llm.worker.WorkerLLM.generate", AsyncMock(return_value=json_output)),
+    ):
+        response = client.post("/ingest", json={"input": "Do something"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "unable to process" in body["response"].lower() or "sorry" in body["response"].lower()
+
+
+def test_pipeline_tool_runtime_exception_returns_worker_failure(mock_classify_execution):
+    """Tool raising a runtime exception returns worker failure response, not 500."""
+    from coretex.registry.tool_registry import Tool
+    from distributions.cortx_local.bootstrap import tool_registry
+
+    def _boom(**kwargs: object) -> None:
+        raise RuntimeError("unexpected error")
+
+    tool_registry._tools["runtime_failure_tool"] = Tool(
+        name="runtime_failure_tool",
+        description="always fails",
+        input_schema={},
+        function=_boom,
+    )
+    try:
+        json_output = '{"action": "tool", "tool": "runtime_failure_tool", "args": {}}'
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", AsyncMock(return_value=json_output)),
+        ):
+            response = client.post("/ingest", json={"input": "Trigger failure"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "unable to process" in body["response"].lower() or "sorry" in body["response"].lower()
+    finally:
+        tool_registry._tools.pop("runtime_failure_tool", None)
+
+
+# ---------------------------------------------------------------------------
+# Section 4.5 — Logging tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_logs_request_received(caplog, mock_classify_execution, mock_worker_response):
+    """event=request_received is emitted at the start of every pipeline run."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    assert any("request_received" in r.message for r in caplog.records)
+
+
+def test_pipeline_logs_classifier_complete(caplog, mock_classify_execution, mock_worker_response):
+    """event=classifier_complete is emitted after classification."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    assert any("classifier_complete" in r.message for r in caplog.records)
+
+
+def test_pipeline_logs_router_selected(caplog, mock_classify_execution, mock_worker_response):
+    """event=router_selected is emitted after routing."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    assert any("router_selected" in r.message for r in caplog.records)
+
+
+def test_pipeline_logs_worker_complete(caplog, mock_classify_execution, mock_worker_response):
+    """event=worker_complete is emitted after the worker finishes."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    assert any("worker_complete" in r.message for r in caplog.records)
+
+
+def test_pipeline_logs_request_complete(caplog, mock_classify_execution, mock_worker_response):
+    """event=request_complete is emitted at the end of every pipeline run."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    assert any("request_complete" in r.message for r in caplog.records)
+
+
+def test_pipeline_request_complete_contains_duration_ms(caplog, mock_classify_execution, mock_worker_response):
+    """event=request_complete includes total_latency_ms."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    complete_records = [r for r in caplog.records if "request_complete" in r.message]
+    assert complete_records
+    assert any("total_latency_ms" in r.message for r in complete_records)
+
+
+def test_pipeline_classifier_complete_contains_duration_ms(caplog, mock_classify_execution, mock_worker_response):
+    """event=classifier_complete includes duration_ms."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    classifier_records = [r for r in caplog.records if "classifier_complete" in r.message]
+    assert classifier_records
+    assert any("duration_ms" in r.message for r in classifier_records)
+
+
+def test_pipeline_classifier_failure_logs_event(caplog):
+    """event=pipeline_classifier_failure is emitted when classifier raises HTTP error."""
+    import logging
+    import httpx
+
+    with caplog.at_level(logging.ERROR, logger="coretex.runtime.pipeline"):
+        with patch(
+            "modules.classifier_basic.classifier.ClassifierBasic.classify",
+            side_effect=httpx.ConnectError("refused"),
+        ):
+            client.post("/ingest", json={"input": "Something"})
+
+    assert any("pipeline_classifier_failure" in r.message for r in caplog.records)
+
+
+def test_pipeline_worker_failure_logs_event(caplog):
+    """event=pipeline_worker_failure is emitted when worker raises HTTP error."""
+    import logging
+    import httpx
+
+    mock_classify = AsyncMock(
+        return_value=__import__(
+            "coretex.interfaces.classifier",
+            fromlist=["ClassificationResult"],
+        ).ClassificationResult(intent="execution", confidence=0.9)
+    )
+    with caplog.at_level(logging.ERROR, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify),
+            patch(
+                "modules.worker_llm.worker.WorkerLLM.generate",
+                side_effect=httpx.ConnectError("refused"),
+            ),
+        ):
+            client.post("/ingest", json={"input": "Something"})
+
+    assert any("pipeline_worker_failure" in r.message for r in caplog.records)
+
+
+def test_pipeline_tool_failure_logs_event(caplog, mock_classify_execution):
+    """event=pipeline_tool_failure is emitted when tool execution raises."""
+    import logging
+    from coretex.registry.tool_registry import Tool
+    from distributions.cortx_local.bootstrap import tool_registry
+
+    def _boom(**kwargs: object) -> None:
+        raise RuntimeError("tool error")
+
+    tool_registry._tools["log_fail_tool"] = Tool(
+        name="log_fail_tool", description="fails", input_schema={}, function=_boom
+    )
+    try:
+        json_output = '{"action": "tool", "tool": "log_fail_tool", "args": {}}'
+        with caplog.at_level(logging.ERROR, logger="coretex.runtime.pipeline"):
+            with (
+                patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+                patch("modules.worker_llm.worker.WorkerLLM.generate", AsyncMock(return_value=json_output)),
+            ):
+                client.post("/ingest", json={"input": "Fail"})
+
+        assert any("pipeline_tool_failure" in r.message for r in caplog.records)
+    finally:
+        tool_registry._tools.pop("log_fail_tool", None)
+
+
+# ---------------------------------------------------------------------------
+# Section 4 — ExecutionContext tests
+# ---------------------------------------------------------------------------
+
+
+def test_execution_context_has_timestamp():
+    """ExecutionContext.timestamp is a float (wall-clock time)."""
+    import time
+    from coretex.runtime.context import ExecutionContext
+
+    before = time.time()
+    ctx = ExecutionContext(user_input="hello")
+    after = time.time()
+
+    assert isinstance(ctx.timestamp, float)
+    assert before <= ctx.timestamp <= after
+
+
+def test_execution_context_metadata_defaults_to_none():
+    """ExecutionContext.metadata defaults to None."""
+    from coretex.runtime.context import ExecutionContext
+
+    ctx = ExecutionContext(user_input="hello")
+    assert ctx.metadata is None
+
+
+def test_execution_context_metadata_can_be_set():
+    """ExecutionContext.metadata can hold an arbitrary dict."""
+    from coretex.runtime.context import ExecutionContext
+
+    ctx = ExecutionContext(user_input="hello", metadata={"source": "test"})
+    assert ctx.metadata == {"source": "test"}
+
+
+# ---------------------------------------------------------------------------
+# Section 4 — Router debug_router tests
+# ---------------------------------------------------------------------------
+
+
+def test_router_debug_decision_logged_when_debug_router_enabled(caplog):
+    """event=router_decision is emitted at DEBUG level when debug_router=True."""
+    import logging
+    from unittest.mock import patch as _patch
+    from modules.router_simple.router import RouterSimple
+
+    router = RouterSimple()
+    with _patch("modules.router_simple.router.settings") as mock_settings:
+        mock_settings.debug_router = True
+        with caplog.at_level(logging.DEBUG, logger="modules.router_simple.router"):
+            router.route("execution", request_id="dbg-test")
+
+    assert any("router_decision" in r.message for r in caplog.records)
+
+
+def test_router_debug_decision_not_logged_when_debug_router_disabled(caplog):
+    """event=router_decision is NOT emitted when debug_router=False."""
+    import logging
+    from unittest.mock import patch as _patch
+    from modules.router_simple.router import RouterSimple
+
+    router = RouterSimple()
+    with _patch("modules.router_simple.router.settings") as mock_settings:
+        mock_settings.debug_router = False
+        with caplog.at_level(logging.DEBUG, logger="modules.router_simple.router"):
+            router.route("execution", request_id="nodbg-test")
+
+    assert not any("router_decision" in r.message for r in caplog.records)
+
