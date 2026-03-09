@@ -17,8 +17,8 @@ from pydantic import BaseModel
 
 from coretex.config.settings import settings
 from coretex.runtime.context import ExecutionContext
-from coretex.runtime.pipeline import PipelineRunner, CLARIFY_RESPONSE
-from distributions.cortx.bootstrap import module_registry, tool_registry
+from coretex.runtime.pipeline import PipelineDefinition, PipelineRunner, CLARIFY_RESPONSE
+from distributions.cortx.bootstrap import module_registry, pipeline_registry, tool_registry
 from distributions.cortx.models import IngestRequest, IngestResponse
 from modules.router_simple.router import ROUTES
 
@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CortX — cortx distribution")
 
-pipeline = PipelineRunner(module_registry=module_registry, tool_registry=tool_registry)
+_pipeline_def: PipelineDefinition = pipeline_registry.get("default")  # type: ignore[assignment]
+pipeline = PipelineRunner(module_registry=module_registry, tool_registry=tool_registry, pipeline=_pipeline_def)
 
 
 # ---------------------------------------------------------------------------
