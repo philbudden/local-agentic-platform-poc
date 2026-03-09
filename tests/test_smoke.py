@@ -954,11 +954,11 @@ def test_pipeline_registry_duplicate_raises():
 
 
 def test_pipeline_registry_unknown_raises():
-    """Getting an unregistered pipeline raises ValueError."""
+    """Getting an unregistered pipeline raises ValueError with pipeline-specific message."""
     from coretex.registry.pipeline_registry import PipelineRegistry
 
     registry = PipelineRegistry()
-    with pytest.raises(ValueError, match="Unknown component"):
+    with pytest.raises(ValueError, match="Unknown pipeline"):
         registry.get("nonexistent")
 
 
