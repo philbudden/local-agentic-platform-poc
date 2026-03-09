@@ -1,6 +1,6 @@
 # Implementation Description — COREtex Runtime Platform
 
-> This document describes the current state of the implementation as of v0.3.x (Stabilisation).
+> This document describes the current state of the implementation as of v0.4.x (Pipeline System).
 > It is intended to be read as context by an LLM when planning future phases of the project.
 
 ---
@@ -13,6 +13,8 @@ v0.3.0 restructured the codebase from a monolithic `app/` package into a **modul
 
 v0.3.x Stabilisation hardened the runtime with: explicit pipeline failure categories and graceful handling, full structured logging lifecycle, registry validation with consistent error messages, ModuleLoader signature validation and empty-registration detection, `load_all()` lifecycle events, router debug logging, and expanded test coverage to 106 tests.
 
+v0.4.0 Pipeline System introduced: `PipelineStep` and `PipelineDefinition` dataclasses, a fully validated `PipelineRegistry` with pipeline-specific error messages, `make_default_pipeline()` factory, a refactored `PipelineRunner` accepting a `PipelineDefinition`, `event=pipeline_selected` observability logging, and default pipeline registration in the bootstrap. Test suite expanded to 129 tests.
+
 ---
 
 ## High-Level Architecture
@@ -23,6 +25,7 @@ User (browser)
         └─► POST /v1/chat/completions  ← OpenAI-compatible shim
               └─► POST /ingest         ← distribution entry point (cortx)
                     └─► PipelineRunner.run(ExecutionContext)
+                          │  [pipeline_selected: pipeline=default]
                           ├─► ClassifierBasic.classify()  → ClassificationResult(intent, confidence)
                           ├─► RouterSimple.route(intent)  → handler name
                           └─► WorkerLLM.generate()        → JSON action envelope
@@ -69,14 +72,15 @@ coretex/
     tool_registry.py    — Tool dataclass, ToolRegistry (raises ValueError on dup/unknown, logs registry_lookup_failed)
     module_registry.py  — ModuleRegistry: classifier/router/worker (raises ValueError on dup/unknown, logs registry_lookup_failed)
     model_registry.py   — ModelProviderRegistry (raises ValueError on dup/unknown, logs registry_lookup_failed)
-    pipeline_registry.py — PipelineRegistry (raises ValueError on dup/unknown, logs registry_lookup_failed)
+    pipeline_registry.py — PipelineRegistry: raises "Pipeline already registered: <name>" / "Unknown pipeline: <name>", logs registry_lookup_failed
   runtime/
     __init__.py
     context.py          — ExecutionContext dataclass (request_id, input, intent, confidence, handler, t_start, timestamp, metadata)
     events.py           — EventBus (emit/emit_warning/emit_error structured log wrappers)
     loader.py           — ModuleLoader (signature validation, empty-registration warning, load_all() lifecycle events)
     executor.py         — AgentAction, ToolExecutor, parse_agent_output
-    pipeline.py         — PipelineRunner (full log lifecycle, explicit failure categories)
+    pipeline.py         — VALID_STEP_TYPES, PipelineStep, PipelineDefinition, make_default_pipeline(),
+                          DEFAULT_PIPELINE_NAME, PipelineRunner (pipeline_selected event, full log lifecycle, explicit failure categories)
   config/
     __init__.py
     settings.py         — Pydantic-settings config (debug_router, log_level, etc.)
@@ -108,12 +112,14 @@ distributions/
   __init__.py
   cortx/
     __init__.py
-    main.py             — FastAPI app: /ingest, /v1/chat/completions, /debug/routes, /health, /v1/models
+    main.py             — FastAPI app: /ingest, /v1/chat/completions, /debug/routes, /health, /v1/models;
+                          gets default pipeline from PipelineRegistry
     models.py           — Pydantic schemas: IngestRequest, IngestResponse
-    bootstrap.py        — Creates registries, loads all modules via loader.load_all()
+    bootstrap.py        — Creates registries, loads all modules via loader.load_all(),
+                          registers default PipelineDefinition in PipelineRegistry
 
 tests/
-  test_smoke.py         — All tests (106 unit + integration via TestClient, Ollama fully mocked)
+  test_smoke.py         — All tests (129 unit + integration via TestClient, Ollama fully mocked)
 
 docs/
   runtime.md            — Runtime architecture, pipeline execution, failure behaviour
@@ -171,7 +177,9 @@ All four registries follow identical safety rules:
 - **`Tool`** — `@dataclass` with `name`, `description`, `input_schema`, `function`. `execute(args, request_id)` logs `event=tool_execute` / `event=tool_execute_complete`.
 - **`ModuleRegistry`** — stores classifier/router/worker instances by name. `register_classifier/router/worker()`, `get_classifier/router/worker()`, `mark_loaded()`, `list_loaded()`.
 - **`ModelProviderRegistry`** — stores `ModelProvider` instances. `register(name, provider)`, `get(name)`, `list()`.
-- **`PipelineRegistry`** — placeholder for v0.4.0 configurable pipelines. `register(name, pipeline)`, `get(name)`, `list()`.
+- **`PipelineRegistry`** — v0.4.0 fully validated registry for `PipelineDefinition` objects. `register(name, pipeline)`, `get(name)`, `list()`.
+  - Duplicate raises `ValueError("Pipeline already registered: <name>")`.
+  - Unknown raises `ValueError("Unknown pipeline: <name>")` and logs `event=registry_lookup_failed`.
 
 ---
 
@@ -217,10 +225,23 @@ class ExecutionContext:
 
 ### `coretex/runtime/pipeline.py`
 
+**Pipeline primitives (v0.4.0):**
+
+- **`VALID_STEP_TYPES`** — `frozenset({'classifier', 'router', 'worker', 'tool_executor'})`.
+- **`PipelineStep`** — `@dataclass` with `component_type: str` and `name: str`. `__post_init__` validates `component_type`; raises `ValueError("Invalid step component_type '...' ...")` on failure.
+- **`PipelineDefinition`** — `@dataclass` with `name: str` and `steps: List[PipelineStep]`. `get_step(component_type)` returns first matching step or `None`.
+- **`DEFAULT_PIPELINE_NAME`** — `"default"`.
+- **`make_default_pipeline()`** — returns a 4-step `PipelineDefinition` named `"default"` with `classifier_basic`, `router_simple`, `worker_llm`, `tool_executor`.
+
+**`PipelineRunner`:**
+
+Constructor: `PipelineRunner(module_registry, tool_registry, pipeline=None)`. When `pipeline=None`, uses `make_default_pipeline()`. Extracts classifier/router/worker names from the pipeline steps.
+
 `PipelineRunner.run(context)` returns `(response_text, intent, confidence)`.
 
 Full log lifecycle:
 ```
+event=pipeline_selected      (includes pipeline name)
 event=request_received
 event=classifier_start
 event=classifier_complete    (includes intent, confidence, duration_ms)
@@ -291,7 +312,7 @@ Intent-aware via `_PROMPTS` dict (execution, planning, analysis, `_FALLBACK_PROM
 
 ### `distributions/cortx/bootstrap.py`
 
-Creates three registry singletons. Calls `ModuleLoader.load_all([...])` with all five module paths. Emits module loading lifecycle events. Imported by `main.py` at module load time.
+Creates four registry singletons (`module_registry`, `tool_registry`, `model_registry`, `pipeline_registry`). Calls `ModuleLoader.load_all([...])` with all five module paths. Registers the default `PipelineDefinition` (via `make_default_pipeline()`) in `pipeline_registry` under the name `"default"`. Imported by `main.py` at module load time.
 
 ---
 
@@ -304,6 +325,8 @@ FastAPI endpoints:
 - `GET /health` — returns `{"status": "ok"}`
 - `GET /v1/models` — returns the `agentic` model descriptor for OpenWebUI
 
+The `PipelineRunner` is built by retrieving the `"default"` `PipelineDefinition` from `pipeline_registry` and passing it to the constructor.
+
 ---
 
 ### `distributions/cortx/models.py`
@@ -315,7 +338,7 @@ FastAPI endpoints:
 
 ## Testing
 
-All tests in `tests/test_smoke.py`. **106 tests** covering all components.
+All tests in `tests/test_smoke.py`. **129 tests** covering all components.
 
 **Test runner:** `pytest tests/test_smoke.py -v`
 
@@ -334,12 +357,17 @@ Test categories:
 - ToolExecutor: respond, tool, unknown action, missing tool name, runtime exception
 - `parse_agent_output`: valid, invalid JSON
 - Filesystem tool
-- Registry duplicate and unknown-lookup tests (all four registries)
+- Registry duplicate and unknown-lookup tests (all four registries, including pipeline-specific messages)
 - ModuleLoader: valid module, missing register(), wrong signature, empty registration, ImportError, load_all() lifecycle
 - Pipeline failure scenarios: classifier HTTP failure, worker HTTP failure, invalid JSON, tool lookup failure, tool runtime exception
-- Logging event tests: all key pipeline events present, latency fields present
+- Logging event tests: all key pipeline events present including `pipeline_selected`, latency fields present
 - ExecutionContext: timestamp, metadata
 - Router debug_router setting
+- **PipelineStep**: valid types, invalid type raises, empty type raises
+- **PipelineDefinition**: name/steps, get_step(), empty steps, `make_default_pipeline()` structure
+- **PipelineRegistry**: duplicate raises pipeline-specific message, unknown raises pipeline-specific message, list, registry_lookup_failed log
+- **PipelineRunner**: component names from definition, default pipeline when None, pipeline_selected event, custom pipeline executes full request
+- Bootstrap: default pipeline registered
 
 ---
 
@@ -348,7 +376,8 @@ Test categories:
 - **v0.1.x**: Skeleton FastAPI service, `/ingest`, classifier LLM call, deterministic router, basic worker LLM call, smoke tests, Docker/Compose, OpenWebUI integration.
 - **v0.2.x**: Intent-aware worker prompts, classifier hardening (prefix checks, alias normalisation, markdown fence stripping, retry-with-fallback), graceful failure handling, request correlation IDs, structured logging, `DEBUG_ROUTER`, `GET /debug/routes`, tool execution layer, `read_file` tool, worker JSON action envelope prompts, integrated executor into pipeline.
 - **v0.3.0**: Runtime extraction — `coretex/` package (interfaces, registries, executor, pipeline, loader, context, events, config); `modules/`; `distributions/cortx/`; updated Dockerfile; removed legacy `app/`, `core/`, `tools/`.
-- **v0.3.x Stabilisation**: Hardened pipeline with explicit failure categories and full log lifecycle; standardised registry validation (consistent error messages, `event=registry_lookup_failed`); ModuleLoader signature validation, empty-registration warning, `load_all()` lifecycle events; `ExecutionContext` metadata and timestamp fields; router `debug_router` logging; expanded test suite (64 → 106 tests); `docs/runtime.md`, `docs/module_development.md`, `docs/distributions.md`.
+- **v0.3.x Stabilisation**: Hardened pipeline with explicit failure categories and full log lifecycle; standardised registry validation; ModuleLoader signature validation, empty-registration warning, `load_all()` lifecycle events; `ExecutionContext` metadata and timestamp fields; router `debug_router` logging; expanded test suite (64 → 106 tests); `docs/runtime.md`, `docs/module_development.md`, `docs/distributions.md`.
+- **v0.4.0 Pipeline System**: `PipelineStep` and `PipelineDefinition` dataclasses with runtime validation; `PipelineRegistry` updated with pipeline-specific error messages (`"Pipeline already registered: <name>"`, `"Unknown pipeline: <name>"`); `PipelineRunner` refactored to accept `PipelineDefinition` and emit `event=pipeline_selected`; `make_default_pipeline()` factory; default pipeline registered in bootstrap; `main.py` updated to retrieve pipeline from registry; test suite expanded from 106 → 129 tests.
 
 ---
 
