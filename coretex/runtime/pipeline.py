@@ -4,6 +4,10 @@ This is the core of the v0.3.0 runtime. It retrieves components from the module
 registry rather than importing them directly, satisfying Guardrail 2 (runtime
 must never depend on modules).
 
+v0.4.0 introduces PipelineStep, PipelineDefinition, and a PipelineRunner that
+accepts a PipelineDefinition, enabling configurable pipelines. The default
+pipeline preserves the original classifier → router → worker → executor behaviour.
+
 Failure behaviour:
     ClassificationFailure   → fallback to intent=ambiguous, return clarification response
     WorkerFailure           → return worker failure response, set intent=ambiguous
@@ -16,7 +20,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Tuple
+from dataclasses import dataclass, field
+from typing import List, Literal, Optional, Tuple
 
 import httpx
 
@@ -27,6 +32,74 @@ from coretex.runtime.executor import ToolExecutor, parse_agent_output
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Pipeline definition primitives
+# ---------------------------------------------------------------------------
+
+VALID_STEP_TYPES = frozenset({"classifier", "router", "worker", "tool_executor"})
+
+DEFAULT_PIPELINE_NAME = "default"
+
+
+@dataclass
+class PipelineStep:
+    """A single step in a pipeline definition.
+
+    Attributes:
+        component_type: The role of the component. Must be one of
+            ``'classifier'``, ``'router'``, ``'worker'``, or ``'tool_executor'``.
+        name: The name under which the component is registered in the
+            ModuleRegistry (not used for ``'tool_executor'``).
+    """
+
+    component_type: Literal["classifier", "router", "worker", "tool_executor"]
+    name: str
+
+    def __post_init__(self) -> None:
+        if self.component_type not in VALID_STEP_TYPES:
+            raise ValueError(
+                f"Invalid step component_type '{self.component_type}'. "
+                f"Must be one of: {sorted(VALID_STEP_TYPES)}"
+            )
+
+
+@dataclass
+class PipelineDefinition:
+    """Describes an ordered sequence of pipeline steps to execute.
+
+    Attributes:
+        name: A unique identifier for this pipeline (used in observability logs).
+        steps: Ordered list of PipelineStep objects describing the pipeline.
+    """
+
+    name: str
+    steps: List[PipelineStep] = field(default_factory=list)
+
+    def get_step(self, component_type: str) -> Optional[PipelineStep]:
+        """Return the first step whose ``component_type`` matches, or ``None``."""
+        for step in self.steps:
+            if step.component_type == component_type:
+                return step
+        return None
+
+
+def make_default_pipeline() -> PipelineDefinition:
+    """Return the default CortX pipeline definition.
+
+    This pipeline replicates the pre-v0.4.0 hardcoded behaviour:
+    ClassifierBasic → RouterSimple → WorkerLLM → ToolExecutor.
+    """
+    return PipelineDefinition(
+        name=DEFAULT_PIPELINE_NAME,
+        steps=[
+            PipelineStep(component_type="classifier", name="classifier_basic"),
+            PipelineStep(component_type="router", name="router_simple"),
+            PipelineStep(component_type="worker", name="worker_llm"),
+            PipelineStep(component_type="tool_executor", name="tool_executor"),
+        ],
+    )
+
+
 CLARIFY_RESPONSE = (
     "I'm not sure what you're asking. Could you provide more detail or clarify your request?"
 )
@@ -36,10 +109,14 @@ _WORKER_FAILURE_RESPONSE = (
 
 
 class PipelineRunner:
-    """Executes the standard CortX request pipeline using registered modules.
+    """Executes a CortX request pipeline defined by a PipelineDefinition.
 
     Components are resolved from the module registry at runtime, so the pipeline
     never hard-codes which classifier, router, or worker implementation is used.
+
+    If no pipeline is supplied, the default pipeline is used, which preserves
+    the pre-v0.4.0 behaviour:
+        ClassifierBasic → RouterSimple → WorkerLLM → ToolExecutor.
 
     The pipeline follows these steps for every request:
         1. Classify  — determine intent and confidence via the registered classifier.
@@ -55,15 +132,20 @@ class PipelineRunner:
         self,
         module_registry: ModuleRegistry,
         tool_registry: ToolRegistry,
-        classifier_name: str = "classifier_basic",
-        router_name: str = "router_simple",
-        worker_name: str = "worker_llm",
+        pipeline: Optional[PipelineDefinition] = None,
     ) -> None:
         self._modules = module_registry
         self._executor = ToolExecutor(tool_registry)
-        self._classifier_name = classifier_name
-        self._router_name = router_name
-        self._worker_name = worker_name
+        self._pipeline = pipeline if pipeline is not None else make_default_pipeline()
+
+        # Resolve component names from pipeline steps (with sensible defaults).
+        classifier_step = self._pipeline.get_step("classifier")
+        router_step = self._pipeline.get_step("router")
+        worker_step = self._pipeline.get_step("worker")
+
+        self._classifier_name = classifier_step.name if classifier_step else "classifier_basic"
+        self._router_name = router_step.name if router_step else "router_simple"
+        self._worker_name = worker_step.name if worker_step else "worker_llm"
 
     async def run(self, context: ExecutionContext) -> Tuple[str, str, float]:
         """Execute the pipeline for the given *context*.
@@ -71,6 +153,11 @@ class PipelineRunner:
         Returns a tuple of ``(response_text, intent, confidence)``.
         """
         logger.info("event=request_received request_id=%s", context.request_id)
+        logger.info(
+            "event=pipeline_selected request_id=%s pipeline=%s",
+            context.request_id,
+            self._pipeline.name,
+        )
         t_start = context.t_start
 
         # ------------------------------------------------------------------

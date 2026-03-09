@@ -954,11 +954,11 @@ def test_pipeline_registry_duplicate_raises():
 
 
 def test_pipeline_registry_unknown_raises():
-    """Getting an unregistered pipeline raises ValueError."""
+    """Getting an unregistered pipeline raises ValueError with pipeline-specific message."""
     from coretex.registry.pipeline_registry import PipelineRegistry
 
     registry = PipelineRegistry()
-    with pytest.raises(ValueError, match="Unknown component"):
+    with pytest.raises(ValueError, match="Unknown pipeline"):
         registry.get("nonexistent")
 
 
@@ -1496,3 +1496,303 @@ def test_router_debug_decision_not_logged_when_debug_router_disabled(caplog):
 
     assert not any("router_decision" in r.message for r in caplog.records)
 
+
+
+# ---------------------------------------------------------------------------
+# v0.4.0: PipelineStep unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_step_valid_classifier_type():
+    """PipelineStep accepts 'classifier' as a valid component_type."""
+    from coretex.runtime.pipeline import PipelineStep
+
+    step = PipelineStep(component_type="classifier", name="classifier_basic")
+    assert step.component_type == "classifier"
+    assert step.name == "classifier_basic"
+
+
+def test_pipeline_step_valid_router_type():
+    """PipelineStep accepts 'router' as a valid component_type."""
+    from coretex.runtime.pipeline import PipelineStep
+
+    step = PipelineStep(component_type="router", name="router_simple")
+    assert step.component_type == "router"
+
+
+def test_pipeline_step_valid_worker_type():
+    """PipelineStep accepts 'worker' as a valid component_type."""
+    from coretex.runtime.pipeline import PipelineStep
+
+    step = PipelineStep(component_type="worker", name="worker_llm")
+    assert step.component_type == "worker"
+
+
+def test_pipeline_step_valid_tool_executor_type():
+    """PipelineStep accepts 'tool_executor' as a valid component_type."""
+    from coretex.runtime.pipeline import PipelineStep
+
+    step = PipelineStep(component_type="tool_executor", name="tool_executor")
+    assert step.component_type == "tool_executor"
+
+
+def test_pipeline_step_invalid_type_raises():
+    """PipelineStep raises ValueError for an unrecognised component_type."""
+    from coretex.runtime.pipeline import PipelineStep
+
+    with pytest.raises(ValueError, match="Invalid step component_type"):
+        PipelineStep(component_type="planner", name="planner_basic")
+
+
+def test_pipeline_step_empty_type_raises():
+    """PipelineStep raises ValueError for an empty component_type string."""
+    from coretex.runtime.pipeline import PipelineStep
+
+    with pytest.raises(ValueError, match="Invalid step component_type"):
+        PipelineStep(component_type="", name="something")
+
+
+# ---------------------------------------------------------------------------
+# v0.4.0: PipelineDefinition unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_definition_name_and_steps():
+    """PipelineDefinition stores name and steps correctly."""
+    from coretex.runtime.pipeline import PipelineDefinition, PipelineStep
+
+    steps = [
+        PipelineStep(component_type="classifier", name="classifier_basic"),
+        PipelineStep(component_type="router", name="router_simple"),
+    ]
+    defn = PipelineDefinition(name="test_pipeline", steps=steps)
+    assert defn.name == "test_pipeline"
+    assert len(defn.steps) == 2
+
+
+def test_pipeline_definition_get_step_returns_matching_step():
+    """get_step() returns the first step with the requested component_type."""
+    from coretex.runtime.pipeline import PipelineDefinition, PipelineStep
+
+    steps = [
+        PipelineStep(component_type="classifier", name="my_classifier"),
+        PipelineStep(component_type="worker", name="my_worker"),
+    ]
+    defn = PipelineDefinition(name="custom", steps=steps)
+    step = defn.get_step("classifier")
+    assert step is not None
+    assert step.name == "my_classifier"
+
+
+def test_pipeline_definition_get_step_returns_none_for_missing():
+    """get_step() returns None when no step with the requested type exists."""
+    from coretex.runtime.pipeline import PipelineDefinition, PipelineStep
+
+    defn = PipelineDefinition(
+        name="minimal",
+        steps=[PipelineStep(component_type="classifier", name="c")],
+    )
+    assert defn.get_step("worker") is None
+
+
+def test_pipeline_definition_empty_steps():
+    """PipelineDefinition can be created with an empty steps list."""
+    from coretex.runtime.pipeline import PipelineDefinition
+
+    defn = PipelineDefinition(name="empty")
+    assert defn.steps == []
+
+
+def test_make_default_pipeline_has_correct_name():
+    """make_default_pipeline() returns a pipeline named 'default'."""
+    from coretex.runtime.pipeline import make_default_pipeline, DEFAULT_PIPELINE_NAME
+
+    defn = make_default_pipeline()
+    assert defn.name == DEFAULT_PIPELINE_NAME
+
+
+def test_make_default_pipeline_has_four_steps():
+    """make_default_pipeline() returns a pipeline with exactly four steps."""
+    from coretex.runtime.pipeline import make_default_pipeline
+
+    defn = make_default_pipeline()
+    assert len(defn.steps) == 4
+
+
+def test_make_default_pipeline_step_names():
+    """make_default_pipeline() uses the standard module names."""
+    from coretex.runtime.pipeline import make_default_pipeline
+
+    defn = make_default_pipeline()
+    types = {s.component_type: s.name for s in defn.steps}
+    assert types["classifier"] == "classifier_basic"
+    assert types["router"] == "router_simple"
+    assert types["worker"] == "worker_llm"
+    assert types["tool_executor"] == "tool_executor"
+
+
+# ---------------------------------------------------------------------------
+# v0.4.0: PipelineRegistry enhanced tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_registry_duplicate_raises_pipeline_specific_message():
+    """Registering the same pipeline name twice raises ValueError with pipeline-specific message."""
+    from coretex.runtime.pipeline import PipelineDefinition
+    from coretex.registry.pipeline_registry import PipelineRegistry
+
+    registry = PipelineRegistry()
+    defn = PipelineDefinition(name="dup_test")
+    registry.register("dup_test", defn)
+
+    with pytest.raises(ValueError, match="Pipeline already registered: dup_test"):
+        registry.register("dup_test", defn)
+
+
+def test_pipeline_registry_unknown_raises_pipeline_specific_message():
+    """Getting an unregistered pipeline raises ValueError with pipeline-specific message."""
+    from coretex.registry.pipeline_registry import PipelineRegistry
+
+    registry = PipelineRegistry()
+
+    with pytest.raises(ValueError, match="Unknown pipeline: missing"):
+        registry.get("missing")
+
+
+def test_pipeline_registry_list_returns_registered_names():
+    """list() returns all registered pipeline names."""
+    from coretex.runtime.pipeline import PipelineDefinition
+    from coretex.registry.pipeline_registry import PipelineRegistry
+
+    registry = PipelineRegistry()
+    registry.register("alpha", PipelineDefinition(name="alpha"))
+    registry.register("beta", PipelineDefinition(name="beta"))
+
+    names = registry.list()
+    assert set(names) == {"alpha", "beta"}
+
+
+def test_pipeline_registry_logs_lookup_failed(caplog):
+    """get() emits event=registry_lookup_failed for unknown pipeline."""
+    import logging
+    from coretex.registry.pipeline_registry import PipelineRegistry
+
+    registry = PipelineRegistry()
+    with caplog.at_level(logging.ERROR, logger="coretex.registry.pipeline_registry"):
+        with pytest.raises(ValueError):
+            registry.get("ghost_pipeline")
+    assert any("registry_lookup_failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# v0.4.0: PipelineRunner with PipelineDefinition
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_runner_uses_classifier_from_pipeline_definition(mock_classify_execution, mock_worker_response):
+    """PipelineRunner respects the classifier name from the PipelineDefinition."""
+    from coretex.runtime.pipeline import PipelineDefinition, PipelineStep, PipelineRunner
+    from distributions.cortx.bootstrap import module_registry, tool_registry
+
+    defn = PipelineDefinition(
+        name="test",
+        steps=[
+            PipelineStep(component_type="classifier", name="classifier_basic"),
+            PipelineStep(component_type="router", name="router_simple"),
+            PipelineStep(component_type="worker", name="worker_llm"),
+            PipelineStep(component_type="tool_executor", name="tool_executor"),
+        ],
+    )
+    runner = PipelineRunner(
+        module_registry=module_registry,
+        tool_registry=tool_registry,
+        pipeline=defn,
+    )
+    assert runner._classifier_name == "classifier_basic"
+    assert runner._router_name == "router_simple"
+    assert runner._worker_name == "worker_llm"
+
+
+def test_pipeline_runner_default_pipeline_when_none_provided():
+    """PipelineRunner uses the default pipeline when pipeline=None."""
+    from coretex.runtime.pipeline import DEFAULT_PIPELINE_NAME, PipelineRunner
+    from distributions.cortx.bootstrap import module_registry, tool_registry
+
+    runner = PipelineRunner(
+        module_registry=module_registry,
+        tool_registry=tool_registry,
+        pipeline=None,
+    )
+    assert runner._pipeline.name == DEFAULT_PIPELINE_NAME
+    assert runner._classifier_name == "classifier_basic"
+
+
+def test_default_pipeline_registered_in_bootstrap():
+    """Bootstrap registers the default pipeline in the PipelineRegistry."""
+    from distributions.cortx.bootstrap import pipeline_registry
+
+    names = pipeline_registry.list()
+    assert "default" in names
+
+
+def test_pipeline_selected_event_logged(caplog, mock_classify_execution, mock_worker_response):
+    """event=pipeline_selected is emitted at the start of every pipeline run."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    assert any("pipeline_selected" in r.message for r in caplog.records)
+
+
+def test_pipeline_selected_event_contains_pipeline_name(caplog, mock_classify_execution, mock_worker_response):
+    """event=pipeline_selected log includes the pipeline name."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    selected_records = [r for r in caplog.records if "pipeline_selected" in r.message]
+    assert selected_records
+    assert any("pipeline=default" in r.message for r in selected_records)
+
+
+@pytest.mark.anyio
+async def test_pipeline_runner_custom_pipeline_executes_full_request(mock_classify_execution, mock_worker_response):
+    """A PipelineRunner built from a custom PipelineDefinition completes a full request."""
+    from coretex.runtime.pipeline import PipelineDefinition, PipelineStep, PipelineRunner
+    from coretex.runtime.context import ExecutionContext
+    from distributions.cortx.bootstrap import module_registry, tool_registry
+
+    custom = PipelineDefinition(
+        name="custom_test",
+        steps=[
+            PipelineStep(component_type="classifier", name="classifier_basic"),
+            PipelineStep(component_type="router", name="router_simple"),
+            PipelineStep(component_type="worker", name="worker_llm"),
+            PipelineStep(component_type="tool_executor", name="tool_executor"),
+        ],
+    )
+    runner = PipelineRunner(
+        module_registry=module_registry,
+        tool_registry=tool_registry,
+        pipeline=custom,
+    )
+    ctx = ExecutionContext(user_input="test input")
+    with (
+        patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+        patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+    ):
+        response_text, intent, confidence = await runner.run(ctx)
+
+    assert response_text == "Here is the result."
+    assert intent == "execution"
+    assert confidence == 0.95

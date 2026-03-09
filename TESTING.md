@@ -24,7 +24,7 @@ pip install -r requirements.txt
 pytest tests/test_smoke.py -v
 ```
 
-Expected output: **106 tests passed**.
+Expected output: **129 tests passed**.
 
 ### What the tests cover
 
@@ -46,12 +46,18 @@ Expected output: **106 tests passed**.
 | `parse_agent_output` | Valid respond JSON; valid tool JSON; invalid JSON raises `JSONDecodeError` |
 | Filesystem tool | Reads existing file; returns error string for missing file |
 | Module bootstrap | `read_file` is registered at startup |
-| **Registry validation** | Duplicate classifier/router/worker/model_provider/pipeline raises; unknown classifier/router/worker/model_provider/pipeline raises; `registry_lookup_failed` log emitted |
+| **Registry validation** | Duplicate classifier/router/worker/model_provider raises; unknown classifier/router/worker/model_provider raises; `registry_lookup_failed` log emitted; pipeline duplicate raises `"Pipeline already registered: <name>"`; unknown pipeline raises `"Unknown pipeline: <name>"` |
 | **ModuleLoader** | Valid module loads; missing `register()` raises; wrong signature raises; empty registration logs warning; `ImportError` raises; `load_all()` emits lifecycle events |
 | **Pipeline failures** | Classifier HTTP failure returns clarification; worker HTTP failure returns graceful response; invalid JSON treated as plain text; tool lookup failure returns failure response; tool runtime exception returns failure response |
-| **Logging events** | `request_received`, `classifier_complete`, `router_selected`, `worker_complete`, `request_complete` all present; `total_latency_ms` and `duration_ms` in appropriate events |
+| **Logging events** | `request_received`, `classifier_complete`, `router_selected`, `worker_complete`, `request_complete` all present; `total_latency_ms` and `duration_ms` in appropriate events; `pipeline_selected` with pipeline name |
 | **ExecutionContext** | `timestamp` is a float; `metadata` defaults to None; `metadata` can be set |
 | **Router debug** | `router_decision` logged at DEBUG when `debug_router=True`; not logged when `debug_router=False` |
+| **PipelineStep** | Valid component types accepted; invalid type raises `ValueError`; empty type raises `ValueError` |
+| **PipelineDefinition** | Name and steps stored; `get_step()` returns matching step or `None`; empty steps allowed |
+| **make_default_pipeline** | Returns pipeline named `"default"` with 4 steps using the standard module names |
+| **PipelineRegistry** | Duplicate raises `"Pipeline already registered: <name>"`; unknown raises `"Unknown pipeline: <name>"`; `list()` returns names; `registry_lookup_failed` logged |
+| **PipelineRunner** | Accepts `PipelineDefinition`; resolves component names from steps; uses default pipeline when `pipeline=None`; emits `event=pipeline_selected` with pipeline name |
+| **Bootstrap** | Default pipeline registered under `"default"` in `PipelineRegistry` |
 | Integration | JSON respond envelope unwrapped; tool call reads real temp file; plain-text fallback; unknown tool returns failure; tool execution logs carry `request_id` |
 
 ---
@@ -209,6 +215,7 @@ docker compose logs -f ingress
 ### Expected log sequence for a tool call request
 
 ```
+event=pipeline_selected     request_id=<id> pipeline=default
 event=request_received      request_id=<id>
 event=classifier_start      request_id=<id> classifier=classifier_basic
 event=classifier_complete   request_id=<id> intent=execution confidence=0.95 duration_ms=312

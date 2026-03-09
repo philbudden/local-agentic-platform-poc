@@ -22,26 +22,27 @@ Over time, CortX AI aims to evolve into a foundation for building intelligent so
 
 ---
 
-## What CortX AI can do today (v0.3.x)
+## What CortX AI can do today (v0.4.x)
 
 - **Understand intent** — classifies every request as `execution`, `planning`, `analysis`, or `ambiguous` using a local LLM, with deterministic prefix checks for common patterns.
 - **Route deterministically** — maps intent to the correct execution path using a pure Python dict, not another LLM.
 - **Generate structured responses** — selects an intent-aware prompt template, calls the worker LLM, and returns a response tailored to the type of request.
 - **Execute tools** — agents return structured JSON specifying either a direct reply or a tool to run; the ToolExecutor carries out the action safely.
 - **Read files** — the built-in `read_file` tool reads any local file by path and returns its contents.
-- **Observe everything** — every request gets a unique ID; every step emits a structured `event=<name> key=value` log.
+- **Observe everything** — every request gets a unique ID; every step emits a structured `event=<name> key=value` log including `event=pipeline_selected`.
+- **Run configurable pipelines** — the `PipelineRegistry` holds named `PipelineDefinition` objects; the `PipelineRunner` dynamically resolves components from the definition at runtime.
 - **Load components as modules** — classifiers, routers, workers, and tools are registered dynamically at startup via the module loader, with signature validation and lifecycle events.
 - **Fail gracefully** — classifier failures, worker failures, tool lookup errors, and tool exceptions all produce safe fallback responses, never unhandled 500s.
 
 ---
 
-## Architecture (v0.3.x)
+## Architecture (v0.4.x)
 
-COREtex v0.3 is structured as a **runtime platform** with three layers:
+COREtex v0.4 is structured as a **runtime platform** with three layers:
 
 ```
 coretex/              ← Runtime platform
-  runtime/          ← Pipeline execution, executor, module loader, context, events
+  runtime/          ← PipelineRunner, PipelineDefinition, PipelineStep, ToolExecutor, ModuleLoader, ExecutionContext, EventBus
   interfaces/       ← ABCs: Classifier, Router, Worker, ModelProvider
   registry/         ← ToolRegistry, ModuleRegistry, ModelProviderRegistry, PipelineRegistry
   config/           ← Settings
@@ -59,6 +60,26 @@ distributions/
 docs/               ← Runtime, module development, and distributions guides
 ```
 
+### Pipeline system (v0.4.0)
+
+Pipelines are now first-class objects. The `PipelineRegistry` holds named `PipelineDefinition` instances, each describing an ordered sequence of `PipelineStep` objects. The `PipelineRunner` reads the definition at startup to determine which named components to use.
+
+```python
+from coretex.runtime.pipeline import PipelineDefinition, PipelineStep
+
+my_pipeline = PipelineDefinition(
+    name="my_pipeline",
+    steps=[
+        PipelineStep(component_type="classifier", name="classifier_basic"),
+        PipelineStep(component_type="router",     name="router_simple"),
+        PipelineStep(component_type="worker",     name="worker_llm"),
+        PipelineStep(component_type="tool_executor", name="tool_executor"),
+    ],
+)
+```
+
+The default pipeline (`"default"`) preserves the pre-v0.4.0 behaviour exactly.
+
 ### Request pipeline
 
 ```
@@ -66,6 +87,7 @@ User (browser)
   └─► OpenWebUI  (port 3000)
         └─► POST /v1/chat/completions  (cortx, port 8000)
               └─► POST /ingest  (internal orchestration via PipelineRunner)
+                    │  pipeline_selected log (pipeline=default)
                     ├─► Classifier  — LLM call 1/2 → ClassificationResult
                     ├─► Router      — pure Python dict lookup → handler
                     └─► Worker      — LLM call 2/2 → JSON action envelope
@@ -189,6 +211,7 @@ docker compose logs ingress | grep "request_id=<id>"
 
 **Typical log sequence (with tool execution):**
 ```
+event=pipeline_selected     request_id=<id> pipeline=default
 event=request_received      request_id=<id>
 event=classifier_start      request_id=<id> classifier=classifier_basic
 event=classifier_complete   request_id=<id> intent=execution confidence=0.95 duration_ms=312

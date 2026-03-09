@@ -1,16 +1,16 @@
 # Development Guide
 
-This guide is written for developers who want to extend or modify COREtex. It covers the v0.3.x architecture, core components, versioning conventions, and how to add new modules, tools, routes, and API endpoints.
+This guide is written for developers who want to extend or modify COREtex. It covers the v0.4.x architecture, core components, versioning conventions, and how to add new modules, tools, routes, pipelines, and API endpoints.
 
 ---
 
 ## Architecture overview
 
-COREtex v0.3.x is a **runtime platform** composed of three distinct layers. The key architectural rule is: **the runtime never imports from modules**. All coupling goes through interfaces and registries.
+COREtex v0.4.x is a **runtime platform** composed of three distinct layers. The key architectural rule is: **the runtime never imports from modules**. All coupling goes through interfaces and registries.
 
 ```
 coretex/              ← Runtime platform (never imports from modules/)
-  runtime/          ← PipelineRunner, ToolExecutor, ModuleLoader, ExecutionContext, EventBus
+  runtime/          ← PipelineRunner, PipelineDefinition, PipelineStep, ToolExecutor, ModuleLoader, ExecutionContext, EventBus
   interfaces/       ← ABCs: Classifier, Router, Worker, ModelProvider
   registry/         ← ToolRegistry, ModuleRegistry, ModelProviderRegistry, PipelineRegistry
   config/           ← Settings (Pydantic BaseSettings)
@@ -43,19 +43,22 @@ POST /ingest  (distributions/cortx/main.py)
     ▼
 PipelineRunner.run(context)  (coretex/runtime/pipeline.py)
     │
+    ├── pipeline_selected log (pipeline=default)
+    ├── request_received log
+    │
     ├── classifier_start log
-    ├── module_registry.get_classifier("classifier_basic")
+    ├── module_registry.get_classifier("classifier_basic")  [from PipelineDefinition]
     │     ClassifierBasic.classify(input) → ClassificationResult(intent, confidence)
     ├── classifier_complete log (with duration_ms)
     │
     ├── router_selected log
-    ├── module_registry.get_router("router_simple")
+    ├── module_registry.get_router("router_simple")  [from PipelineDefinition]
     │     RouterSimple.route(intent) → handler str
     │
     ├── [if handler == "clarify"] → return clarification response
     │
     ├── worker_start log
-    └── module_registry.get_worker("worker_llm")
+    └── module_registry.get_worker("worker_llm")  [from PipelineDefinition]
           WorkerLLM.generate(input, intent) → raw JSON string
           worker_complete log (with duration_ms)
               │
@@ -101,14 +104,15 @@ coretex/
     tool_registry.py    — Tool dataclass, ToolRegistry
     module_registry.py  — ModuleRegistry (holds classifier/router/worker instances)
     model_registry.py   — ModelProviderRegistry
-    pipeline_registry.py — PipelineRegistry
+    pipeline_registry.py — PipelineRegistry (pipeline-specific error messages)
   runtime/
     __init__.py
     context.py          — ExecutionContext dataclass (request_id, input, timestamp, metadata)
     events.py           — EventBus
     loader.py           — ModuleLoader (with signature validation, load_all())
     executor.py         — AgentAction, ToolExecutor, parse_agent_output
-    pipeline.py         — PipelineRunner with full log lifecycle and failure handling
+    pipeline.py         — PipelineStep, PipelineDefinition, make_default_pipeline(),
+                          PipelineRunner with pipeline_selected logging and full log lifecycle
   config/
     __init__.py
     settings.py         — Pydantic-settings config (Settings singleton)
@@ -140,9 +144,10 @@ distributions/
   __init__.py
   cortx/
     __init__.py
-    main.py             — FastAPI app entry point
+    main.py             — FastAPI app entry point; gets default pipeline from PipelineRegistry
     models.py           — Pydantic schemas: IngestRequest, IngestResponse
-    bootstrap.py        — Creates registries, calls ModuleLoader.load_all()
+    bootstrap.py        — Creates registries, calls ModuleLoader.load_all(),
+                          registers default PipelineDefinition in PipelineRegistry
 
 docs/
   runtime.md            — Pipeline internals, failure catalogue, log event reference
@@ -150,7 +155,7 @@ docs/
   distributions.md      — Distribution system, bootstrap pattern, Docker deployment
 
 tests/
-  test_smoke.py         — Full test suite: 106 tests (unit + integration, no Ollama required)
+  test_smoke.py         — Full test suite: 129 tests (unit + integration, no Ollama required)
 
 Dockerfile              — python:3.11-slim, runs uvicorn distributions.cortx.main:app
 docker-compose.yml      — ingress + openwebui on an isolated bridge network
@@ -173,12 +178,14 @@ Abstract base classes defining what each component type must implement:
 
 ### `coretex/registry/`
 
-All four registries follow the same pattern: `register()`, `get()`, `list()`. Duplicate names raise `ValueError("Component already registered: <name>")`. Unknown names raise `ValueError("Unknown component: <name>")` and log `event=registry_lookup_failed`.
+All four registries follow the same pattern: `register()`, `get()`, `list()`. All duplicate names raise `ValueError("Component already registered: <name>")` and all unknown lookups raise `ValueError("Unknown component: <name>")` and log `event=registry_lookup_failed`, **except** `PipelineRegistry` which uses pipeline-specific messages:
 
 - **`ToolRegistry`** — stores `Tool` dataclasses by name.
 - **`ModuleRegistry`** — stores classifier/router/worker instances by name.
 - **`ModelProviderRegistry`** — stores `ModelProvider` instances by name.
-- **`PipelineRegistry`** — stores pipeline instances by name.
+- **`PipelineRegistry`** — stores `PipelineDefinition` instances by name.
+  - Duplicate raises `ValueError("Pipeline already registered: <name>")`.
+  - Unknown raises `ValueError("Unknown pipeline: <name>")` and logs `event=registry_lookup_failed`.
 
 ### `coretex/runtime/context.py`
 
@@ -196,12 +203,23 @@ All four registries follow the same pattern: `register()`, `get()`, `list()`. Du
 
 ### `coretex/runtime/pipeline.py`
 
-`PipelineRunner.run(context: ExecutionContext) -> Tuple[str, str, float]` — the core orchestrator. Returns `(response_text, intent, confidence)`. Failure categories:
+**Pipeline primitives (v0.4.0):**
+
+- **`VALID_STEP_TYPES`** — `frozenset` of valid component types: `{'classifier', 'router', 'worker', 'tool_executor'}`.
+- **`PipelineStep`** — dataclass with `component_type: str` and `name: str`. `__post_init__` validates `component_type` against `VALID_STEP_TYPES`, raising `ValueError("Invalid step component_type ...")` on failure.
+- **`PipelineDefinition`** — dataclass with `name: str` and `steps: List[PipelineStep]`. `get_step(component_type)` returns the first matching step or `None`.
+- **`make_default_pipeline()`** — factory function returning the default 4-step pipeline (classifier_basic → router_simple → worker_llm → tool_executor).
+- **`DEFAULT_PIPELINE_NAME`** — constant `"default"`.
+
+**`PipelineRunner`:**
+
+`PipelineRunner(module_registry, tool_registry, pipeline=None)` — accepts an optional `PipelineDefinition`. If `None`, uses `make_default_pipeline()`.
+
+`run(context: ExecutionContext) -> Tuple[str, str, float]` — the core orchestrator. Emits `event=pipeline_selected pipeline=<name>` at start. Returns `(response_text, intent, confidence)`. Failure categories:
 - `pipeline_classifier_failure` — classifier HTTP error; returns clarify response with `intent=ambiguous`.
 - `pipeline_worker_failure` — worker HTTP error; returns failure response.
 - `pipeline_agent_parse_failure` — invalid JSON from worker; treats as plain text.
 - `pipeline_tool_failure` — unknown tool name; returns failure response.
-- `pipeline_worker_failure` (runtime) — tool/executor exception; returns failure response.
 
 ### `coretex/runtime/loader.py`
 
@@ -247,6 +265,7 @@ logger.info("event=tool_execute tool=%s request_id=%s", name, request_id)
 Standard log events in sequence for a tool call request:
 
 ```
+event=pipeline_selected       request_id=<id> pipeline=<name>
 event=request_received        request_id=<id>
 event=classifier_start        request_id=<id> classifier=<name>
 event=classifier_complete     request_id=<id> intent=<intent> confidence=<float> duration_ms=<int>
@@ -259,6 +278,56 @@ event=request_complete        request_id=<id> intent=<intent> confidence=<float>
 ```
 
 Set `DEBUG_ROUTER=true` to additionally log `event=router_decision` at DEBUG level.
+
+---
+
+## How to register a custom pipeline
+
+A custom pipeline can be assembled from any registered components and added to the `PipelineRegistry` during bootstrap.
+
+### 1. Define the pipeline
+
+```python
+from coretex.runtime.pipeline import PipelineDefinition, PipelineStep
+
+my_pipeline = PipelineDefinition(
+    name="my_pipeline",
+    steps=[
+        PipelineStep(component_type="classifier", name="my_custom_classifier"),
+        PipelineStep(component_type="router",     name="router_simple"),
+        PipelineStep(component_type="worker",     name="worker_llm"),
+        PipelineStep(component_type="tool_executor", name="tool_executor"),
+    ],
+)
+```
+
+Valid `component_type` values: `"classifier"`, `"router"`, `"worker"`, `"tool_executor"`.
+
+### 2. Register in bootstrap
+
+```python
+# distributions/cortx/bootstrap.py
+from coretex.registry.pipeline_registry import PipelineRegistry
+
+pipeline_registry = PipelineRegistry()
+pipeline_registry.register("my_pipeline", my_pipeline)
+```
+
+### 3. Use it in main.py
+
+```python
+from distributions.cortx.bootstrap import module_registry, pipeline_registry, tool_registry
+from coretex.runtime.pipeline import PipelineRunner
+
+pipeline_def = pipeline_registry.get("my_pipeline")
+pipeline = PipelineRunner(
+    module_registry=module_registry,
+    tool_registry=tool_registry,
+    pipeline=pipeline_def,
+)
+```
+
+The `PipelineRunner` resolves components from the definition at startup. The pipeline name appears in `event=pipeline_selected` logs.
 
 ---
 
@@ -455,7 +524,7 @@ DEBUG_ROUTER=true LOG_LEVEL=DEBUG uvicorn distributions.cortx.main:app --reload
 ## Running tests
 
 ```bash
-# All 106 tests
+# All 129 tests
 pytest tests/test_smoke.py -v
 
 # Single test
@@ -480,8 +549,10 @@ All tests mock Ollama. No running services required.
 
 ## What comes next (planned phases)
 
+- **v0.5 — Model Provider System** — `ModelProvider` abstraction, `model_provider_ollama` module, hybrid model strategies.
+- **v0.6 — Distribution Layer** — first CortX distributions (e.g., `cortx_local`), bootstrapped module loading.
+- **v0.7 — Event System** — runtime-wide event bus, structured events for debugging, observability, and metrics.
+- **v0.8 — Tool System Modularisation** — refactor tools into modules (`tools_filesystem`, `tools_shell`, `tools_http`, `tools_git`).
 - **Task Graph / Planner** — multi-step orchestration where the planner decomposes requests into a DAG of sub-tasks.
-- **Agent collaboration** — multiple agents working on sub-tasks in parallel.
 - **Memory layer** — optional context injection for session continuity.
-- **Additional tools** — web fetch, shell execution, vector search, database queries.
 - **Streaming responses** — progressive output for long-running tasks.

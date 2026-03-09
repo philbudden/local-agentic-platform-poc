@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from coretex.registry.model_registry import ModelProviderRegistry
 from coretex.registry.module_registry import ModuleRegistry
+from coretex.registry.pipeline_registry import PipelineRegistry
 from coretex.registry.tool_registry import ToolRegistry
 from coretex.runtime.loader import ModuleLoader
+from coretex.runtime.pipeline import make_default_pipeline
 
 # ---------------------------------------------------------------------------
 # Registries (singletons shared across the application)
@@ -14,6 +16,7 @@ from coretex.runtime.loader import ModuleLoader
 module_registry = ModuleRegistry()
 tool_registry = ToolRegistry()
 model_registry = ModelProviderRegistry()
+pipeline_registry = PipelineRegistry()
 
 # ---------------------------------------------------------------------------
 # Load modules
@@ -32,3 +35,9 @@ _loader.load_all([
     "modules.worker_llm.module",
     "modules.tools_filesystem.module",
 ])
+
+# ---------------------------------------------------------------------------
+# Register pipelines
+# ---------------------------------------------------------------------------
+
+pipeline_registry.register("default", make_default_pipeline())
