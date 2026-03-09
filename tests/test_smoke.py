@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from coretex.interfaces.classifier import ClassificationResult
-from distributions.cortx_local.main import app
+from distributions.cortx.main import app
 from modules.router_simple.router import RouterSimple, ROUTES
 
 _router = RouterSimple()
@@ -638,7 +638,7 @@ def test_filesystem_read_file_missing_returns_error_string():
 
 def test_bootstrap_tools_registers_read_file():
     """bootstrap registers the read_file tool at module load."""
-    from distributions.cortx_local.bootstrap import tool_registry
+    from distributions.cortx.bootstrap import tool_registry
 
     assert "read_file" in tool_registry.list()
 
@@ -749,7 +749,7 @@ def test_ingest_agent_selected_event_logged(caplog, mock_classify_execution, moc
 def test_ingest_unexpected_tool_exception_returns_200_failure(mock_classify_execution):
     """A tool function raising an unexpected exception must NOT produce a 500."""
     from coretex.registry.tool_registry import Tool
-    from distributions.cortx_local.bootstrap import tool_registry
+    from distributions.cortx.bootstrap import tool_registry
 
     def _exploding_tool(**kwargs):
         raise RuntimeError("disk on fire")
@@ -1230,7 +1230,7 @@ def test_pipeline_tool_lookup_failure_returns_worker_failure(mock_classify_execu
 def test_pipeline_tool_runtime_exception_returns_worker_failure(mock_classify_execution):
     """Tool raising a runtime exception returns worker failure response, not 500."""
     from coretex.registry.tool_registry import Tool
-    from distributions.cortx_local.bootstrap import tool_registry
+    from distributions.cortx.bootstrap import tool_registry
 
     def _boom(**kwargs: object) -> None:
         raise RuntimeError("unexpected error")
@@ -1406,7 +1406,7 @@ def test_pipeline_tool_failure_logs_event(caplog, mock_classify_execution):
     """event=pipeline_tool_failure is emitted when tool execution raises."""
     import logging
     from coretex.registry.tool_registry import Tool
-    from distributions.cortx_local.bootstrap import tool_registry
+    from distributions.cortx.bootstrap import tool_registry
 
     def _boom(**kwargs: object) -> None:
         raise RuntimeError("tool error")

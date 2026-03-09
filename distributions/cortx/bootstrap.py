@@ -1,4 +1,4 @@
-"""Bootstrap — load all modules and build the shared registries for cortx_local."""
+"""Bootstrap — load all modules and build the shared registries for cortx."""
 
 from __future__ import annotations
 

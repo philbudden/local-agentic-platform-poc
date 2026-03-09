@@ -14,7 +14,7 @@ A **distribution** is a complete, runnable CortX system assembled from:
 
 Distributions are the user-facing product layer. The runtime and modules remain independent.
 
-The first distribution is `cortx_local`, located in `distributions/cortx_local/`.
+The first distribution is `cortx`, located in `distributions/cortx/`.
 
 ---
 
@@ -28,7 +28,7 @@ Every distribution must bootstrap the runtime before serving requests. Bootstrap
 
 After bootstrap completes, the registries hold all registered components and the `PipelineRunner` can be created.
 
-### Example Bootstrap (`distributions/cortx_local/bootstrap.py`)
+### Example Bootstrap (`distributions/cortx/bootstrap.py`)
 
 ```python
 from coretex.registry.model_registry import ModelProviderRegistry
@@ -115,9 +115,9 @@ Distributions may include:
 
 ---
 
-## The `cortx_local` Distribution
+## The `cortx` Distribution
 
-The `cortx_local` distribution is the reference implementation. It provides:
+The `cortx` distribution is the reference implementation. It provides:
 
 | Component | Module |
 |-----------|--------|
@@ -126,7 +126,7 @@ The `cortx_local` distribution is the reference implementation. It provides:
 | Worker | `modules.worker_llm.module` |
 | Filesystem tool | `modules.tools_filesystem.module` |
 | Ollama model provider | `modules.model_provider_ollama.module` |
-| FastAPI ingress | `distributions/cortx_local/main.py` |
+| FastAPI ingress | `distributions/cortx/main.py` |
 | OpenAI chat shim | `/v1/chat/completions` endpoint |
 
 ### Endpoints
@@ -155,7 +155,7 @@ The `cortx_local` distribution is the reference implementation. It provides:
 
 ## Docker Deployment
 
-The `cortx_local` distribution includes a `Dockerfile` and `docker-compose.yml`.
+The `cortx` distribution includes a `Dockerfile` and `docker-compose.yml`.
 
 ```bash
 # Start the full stack (COREtex + OpenWebUI)

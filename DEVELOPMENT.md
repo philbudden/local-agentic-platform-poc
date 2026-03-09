@@ -23,7 +23,7 @@ modules/            ← Implementations registered at startup
   model_provider_ollama/   ← Ollama inference backend
 
 distributions/
-  cortx_local/      ← FastAPI ingress + OpenWebUI (main.py, bootstrap.py, models.py)
+  cortx/      ← FastAPI ingress + OpenWebUI (main.py, bootstrap.py, models.py)
 
 docs/               ← Extended documentation
   runtime.md              ← Runtime internals, pipeline flow, failure catalogue
@@ -37,7 +37,7 @@ docs/               ← Extended documentation
 User input
     │
     ▼
-POST /ingest  (distributions/cortx_local/main.py)
+POST /ingest  (distributions/cortx/main.py)
     │  Creates ExecutionContext(request_id=uuid, input=..., timestamp=time.time())
     │
     ▼
@@ -138,7 +138,7 @@ modules/
 
 distributions/
   __init__.py
-  cortx_local/
+  cortx/
     __init__.py
     main.py             — FastAPI app entry point
     models.py           — Pydantic schemas: IngestRequest, IngestResponse
@@ -152,7 +152,7 @@ docs/
 tests/
   test_smoke.py         — Full test suite: 106 tests (unit + integration, no Ollama required)
 
-Dockerfile              — python:3.11-slim, runs uvicorn distributions.cortx_local.main:app
+Dockerfile              — python:3.11-slim, runs uvicorn distributions.cortx.main:app
 docker-compose.yml      — ingress + openwebui on an isolated bridge network
 requirements.txt        — All Python dependencies
 pytest.ini              — Sets pythonpath = . so imports resolve without install
@@ -311,7 +311,7 @@ def test_write_file_tool():
     assert "Written to" in result
 
 def test_bootstrap_registers_write_file():
-    from distributions.cortx_local.bootstrap import tool_registry
+    from distributions.cortx.bootstrap import tool_registry
     assert "write_file" in tool_registry.list()
 ```
 
@@ -394,7 +394,7 @@ _PROMPTS: dict[str, str] = {
 
 ## How to add a new API endpoint
 
-Add a route to `distributions/cortx_local/main.py`:
+Add a route to `distributions/cortx/main.py`:
 
 ```python
 @app.get("/my-endpoint")
@@ -442,12 +442,12 @@ Every event emits `event=<name>` at INFO level. Thread `request_id` through all 
 
 ```bash
 pip install -r requirements.txt
-uvicorn distributions.cortx_local.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn distributions.cortx.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Enable debug router logging:
 ```bash
-DEBUG_ROUTER=true LOG_LEVEL=DEBUG uvicorn distributions.cortx_local.main:app --reload
+DEBUG_ROUTER=true LOG_LEVEL=DEBUG uvicorn distributions.cortx.main:app --reload
 ```
 
 ---

@@ -1,4 +1,4 @@
-"""Ingress API — FastAPI entry point for the cortx_local distribution.
+"""Ingress API — FastAPI entry point for the cortx distribution.
 
 Exposes:
   POST /ingest                  — internal schema used by custom clients
@@ -18,14 +18,14 @@ from pydantic import BaseModel
 from coretex.config.settings import settings
 from coretex.runtime.context import ExecutionContext
 from coretex.runtime.pipeline import PipelineRunner
-from distributions.cortx_local.bootstrap import module_registry, tool_registry
-from distributions.cortx_local.models import IngestRequest, IngestResponse
+from distributions.cortx.bootstrap import module_registry, tool_registry
+from distributions.cortx.models import IngestRequest, IngestResponse
 from modules.router_simple.router import ROUTES
 
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CortX — cortx_local distribution")
+app = FastAPI(title="CortX — cortx distribution")
 
 pipeline = PipelineRunner(module_registry=module_registry, tool_registry=tool_registry)
 

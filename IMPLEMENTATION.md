@@ -21,7 +21,7 @@ v0.3.x Stabilisation hardened the runtime with: explicit pipeline failure catego
 User (browser)
   └─► OpenWebUI  (port 3000)
         └─► POST /v1/chat/completions  ← OpenAI-compatible shim
-              └─► POST /ingest         ← distribution entry point (cortx_local)
+              └─► POST /ingest         ← distribution entry point (cortx)
                     └─► PipelineRunner.run(ExecutionContext)
                           ├─► ClassifierBasic.classify()  → ClassificationResult(intent, confidence)
                           ├─► RouterSimple.route(intent)  → handler name
@@ -106,7 +106,7 @@ modules/
 
 distributions/
   __init__.py
-  cortx_local/
+  cortx/
     __init__.py
     main.py             — FastAPI app: /ingest, /v1/chat/completions, /debug/routes, /health, /v1/models
     models.py           — Pydantic schemas: IngestRequest, IngestResponse
@@ -120,7 +120,7 @@ docs/
   module_development.md — How to build modules
   distributions.md      — How to build distributions
 
-Dockerfile              — python:3.11-slim, uvicorn distributions.cortx_local.main:app
+Dockerfile              — python:3.11-slim, uvicorn distributions.cortx.main:app
 docker-compose.yml      — ingress + openwebui services on isolated bridge network
 requirements.txt        — fastapi, uvicorn, httpx, pydantic, pydantic-settings, pytest
 pytest.ini              — pythonpath = . so all package imports resolve without install
@@ -289,13 +289,13 @@ Intent-aware via `_PROMPTS` dict (execution, planning, analysis, `_FALLBACK_PROM
 
 ---
 
-### `distributions/cortx_local/bootstrap.py`
+### `distributions/cortx/bootstrap.py`
 
 Creates three registry singletons. Calls `ModuleLoader.load_all([...])` with all five module paths. Emits module loading lifecycle events. Imported by `main.py` at module load time.
 
 ---
 
-### `distributions/cortx_local/main.py`
+### `distributions/cortx/main.py`
 
 FastAPI endpoints:
 - `POST /ingest` — creates `ExecutionContext`, calls `pipeline.run()`, returns `IngestResponse`
@@ -306,7 +306,7 @@ FastAPI endpoints:
 
 ---
 
-### `distributions/cortx_local/models.py`
+### `distributions/cortx/models.py`
 
 - **`IngestRequest`** — `input: str`. Validator rejects empty/whitespace (HTTP 422).
 - **`IngestResponse`** — `intent: str`, `confidence: float`, `response: str`.
@@ -347,7 +347,7 @@ Test categories:
 
 - **v0.1.x**: Skeleton FastAPI service, `/ingest`, classifier LLM call, deterministic router, basic worker LLM call, smoke tests, Docker/Compose, OpenWebUI integration.
 - **v0.2.x**: Intent-aware worker prompts, classifier hardening (prefix checks, alias normalisation, markdown fence stripping, retry-with-fallback), graceful failure handling, request correlation IDs, structured logging, `DEBUG_ROUTER`, `GET /debug/routes`, tool execution layer, `read_file` tool, worker JSON action envelope prompts, integrated executor into pipeline.
-- **v0.3.0**: Runtime extraction — `coretex/` package (interfaces, registries, executor, pipeline, loader, context, events, config); `modules/`; `distributions/cortx_local/`; updated Dockerfile; removed legacy `app/`, `core/`, `tools/`.
+- **v0.3.0**: Runtime extraction — `coretex/` package (interfaces, registries, executor, pipeline, loader, context, events, config); `modules/`; `distributions/cortx/`; updated Dockerfile; removed legacy `app/`, `core/`, `tools/`.
 - **v0.3.x Stabilisation**: Hardened pipeline with explicit failure categories and full log lifecycle; standardised registry validation (consistent error messages, `event=registry_lookup_failed`); ModuleLoader signature validation, empty-registration warning, `load_all()` lifecycle events; `ExecutionContext` metadata and timestamp fields; router `debug_router` logging; expanded test suite (64 → 106 tests); `docs/runtime.md`, `docs/module_development.md`, `docs/distributions.md`.
 
 ---

@@ -1,4 +1,4 @@
-"""Pydantic schemas for the cortx_local distribution HTTP API."""
+"""Pydantic schemas for the cortx distribution HTTP API."""
 
 from __future__ import annotations
 

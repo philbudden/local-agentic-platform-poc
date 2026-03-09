@@ -9,4 +9,4 @@ COPY coretex/ ./coretex/
 COPY modules/ ./modules/
 COPY distributions/ ./distributions/
 
-CMD ["uvicorn", "distributions.cortx_local.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "distributions.cortx.main:app", "--host", "0.0.0.0", "--port", "8000"]

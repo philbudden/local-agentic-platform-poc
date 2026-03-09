@@ -60,7 +60,7 @@ Expected output: **106 tests passed**.
 
 ```bash
 pip install -r requirements.txt
-uvicorn distributions.cortx_local.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn distributions.cortx.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 This starts the ingress API on port 8000. Ollama must be running on the host for real requests to work.
@@ -161,7 +161,7 @@ Expected: the response contains `"This is my test file content."`.
 ### Directly test the tool execution layer (Python REPL)
 
 ```python
-from distributions.cortx_local.bootstrap import tool_registry
+from distributions.cortx.bootstrap import tool_registry
 from coretex.runtime.executor import ToolExecutor, AgentAction, parse_agent_output
 
 executor = ToolExecutor(tool_registry)
@@ -182,7 +182,7 @@ print(executor.execute(action))  # → "file content here"
 ### Missing file returns an error string (not a 500)
 
 ```python
-from distributions.cortx_local.bootstrap import tool_registry
+from distributions.cortx.bootstrap import tool_registry
 from coretex.runtime.executor import AgentAction, ToolExecutor
 
 executor = ToolExecutor(tool_registry)

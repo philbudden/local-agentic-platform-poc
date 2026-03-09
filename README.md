@@ -54,7 +54,7 @@ modules/            ← Components implementing interfaces, registered at startu
   model_provider_ollama/ ← Ollama inference backend
 
 distributions/
-  cortx_local/      ← FastAPI ingress + OpenWebUI integration
+  cortx/      ← FastAPI ingress + OpenWebUI integration
 
 docs/               ← Runtime, module development, and distributions guides
 ```
@@ -64,7 +64,7 @@ docs/               ← Runtime, module development, and distributions guides
 ```
 User (browser)
   └─► OpenWebUI  (port 3000)
-        └─► POST /v1/chat/completions  (cortx_local, port 8000)
+        └─► POST /v1/chat/completions  (cortx, port 8000)
               └─► POST /ingest  (internal orchestration via PipelineRunner)
                     ├─► Classifier  — LLM call 1/2 → ClassificationResult
                     ├─► Router      — pure Python dict lookup → handler
