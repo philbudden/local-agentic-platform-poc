@@ -10,13 +10,51 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from typing import Optional
 
 from coretex.interfaces.classifier import ClassificationResult
+from coretex.interfaces.model_provider import (
+    ModelProvider,
+    ModelProviderConnectionError,
+    ModelProviderResponseError,
+    ModelProviderTimeoutError,
+)
 from distributions.cortx.main import app
 from modules.router_simple.router import RouterSimple, ROUTES
 
 _router = RouterSimple()
 client = TestClient(app)
+
+
+class StubModelProvider(ModelProvider):
+    """Test double for injected model providers."""
+
+    def __init__(
+        self,
+        *,
+        generate_result: str = "",
+        chat_result: str = "",
+        generate_error: Optional[Exception] = None,
+        chat_error: Optional[Exception] = None,
+    ) -> None:
+        self.generate_result = generate_result
+        self.chat_result = chat_result
+        self.generate_error = generate_error
+        self.chat_error = chat_error
+        self.generate_calls: list[dict[str, object]] = []
+        self.chat_calls: list[dict[str, object]] = []
+
+    async def generate(self, model: str, prompt: str, **kwargs: object) -> str:
+        self.generate_calls.append({"model": model, "prompt": prompt, "kwargs": kwargs})
+        if self.generate_error is not None:
+            raise self.generate_error
+        return self.generate_result
+
+    async def chat(self, model: str, messages: list, **kwargs: object) -> str:
+        self.chat_calls.append({"model": model, "messages": messages, "kwargs": kwargs})
+        if self.chat_error is not None:
+            raise self.chat_error
+        return self.chat_result
 
 # ---------------------------------------------------------------------------
 # Router unit tests (pure Python — no mocking needed)
@@ -64,7 +102,7 @@ def test_classifier_response_rejects_invalid_intent():
 
 
 # ---------------------------------------------------------------------------
-# Classifier behaviour (unit — patching _call_ollama)
+# Classifier behaviour (unit — injected model provider)
 # ---------------------------------------------------------------------------
 
 
@@ -73,12 +111,11 @@ async def test_classifier_falls_back_on_network_error():
     """Ollama unreachable on both attempts → intent=ambiguous, confidence=0.0."""
     from modules.classifier_basic.classifier import ClassifierBasic
 
-    classifier = ClassifierBasic()
-    with patch(
-        "modules.classifier_basic.classifier._call_ollama",
-        side_effect=httpx.ConnectError("refused"),
-    ):
-        result = await classifier.classify("Compare quantum and classical computing")
+    classifier = ClassifierBasic(
+        model_provider=StubModelProvider(chat_error=ModelProviderConnectionError("refused")),
+        model_provider_name="stub",
+    )
+    result = await classifier.classify("Compare quantum and classical computing")
 
     assert result.intent == "ambiguous"
     assert result.confidence == 0.0
@@ -86,18 +123,80 @@ async def test_classifier_falls_back_on_network_error():
 
 @pytest.mark.anyio
 async def test_classifier_falls_back_on_invalid_json():
-    """Ollama returns non-JSON on both attempts → intent=ambiguous, confidence=0.0."""
+    """Model provider returns non-JSON on both attempts → intent=ambiguous, confidence=0.0."""
     from modules.classifier_basic.classifier import ClassifierBasic
 
-    classifier = ClassifierBasic()
-    with patch(
-        "modules.classifier_basic.classifier._call_ollama",
-        return_value="not json at all",
-    ):
-        result = await classifier.classify("Compare quantum and classical computing")
+    classifier = ClassifierBasic(
+        model_provider=StubModelProvider(chat_result="not json at all"),
+        model_provider_name="stub",
+    )
+    result = await classifier.classify("Compare quantum and classical computing")
 
     assert result.intent == "ambiguous"
     assert result.confidence == 0.0
+
+
+@pytest.mark.anyio
+async def test_classifier_uses_injected_model_provider():
+    """Classifier routes LLM classification through the injected model provider."""
+    from modules.classifier_basic.classifier import ClassifierBasic
+
+    provider = StubModelProvider(chat_result='{"intent":"analysis","confidence":0.81}')
+    classifier = ClassifierBasic(model_provider=provider, model_provider_name="stub")
+    result = await classifier.classify("Compare quantum and classical computing", request_id="req-1")
+
+    assert result.intent == "analysis"
+    assert result.confidence == 0.81
+    assert len(provider.chat_calls) == 1
+    assert provider.chat_calls[0]["model"] == "llama3.2:3b"
+    messages = provider.chat_calls[0]["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1]["content"] == "Compare quantum and classical computing"
+    assert provider.chat_calls[0]["kwargs"]["request_id"] == "req-1"
+
+
+@pytest.mark.anyio
+async def test_classifier_prefix_match_skips_model_provider():
+    """Deterministic prefix matches must not invoke the model provider."""
+    from modules.classifier_basic.classifier import ClassifierBasic
+
+    provider = StubModelProvider(chat_result='{"intent":"analysis","confidence":0.81}')
+    classifier = ClassifierBasic(model_provider=provider, model_provider_name="stub")
+    result = await classifier.classify("Write a haiku", request_id="req-prefix")
+
+    assert result.intent == "execution"
+    assert provider.chat_calls == []
+
+
+@pytest.mark.anyio
+async def test_classifier_llm_call_log_includes_model_provider(caplog):
+    """Classifier llm_call log includes the injected model provider name."""
+    import logging
+    from modules.classifier_basic.classifier import ClassifierBasic
+
+    provider = StubModelProvider(chat_result='{"intent":"analysis","confidence":0.81}')
+    classifier = ClassifierBasic(model_provider=provider, model_provider_name="stub")
+
+    with caplog.at_level(logging.INFO, logger="modules.classifier_basic.classifier"):
+        await classifier.classify("Compare operating systems", request_id="req-log")
+
+    assert any("llm_call" in r.message and "model_provider=stub" in r.message for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_classifier_passes_chat_options_to_model_provider():
+    """Classifier passes chat format, options, and timeout through to the provider."""
+    from modules.classifier_basic.classifier import ClassifierBasic
+
+    provider = StubModelProvider(chat_result='{"intent":"analysis","confidence":0.81}')
+    classifier = ClassifierBasic(model_provider=provider, model_provider_name="stub")
+    await classifier.classify("Compare operating systems", request_id="req-opts")
+
+    kwargs = provider.chat_calls[0]["kwargs"]
+    assert kwargs["format"] == "json"
+    assert kwargs["timeout"] == 60
+    assert kwargs["options"]["temperature"] == 0
+    assert kwargs["options"]["num_predict"] == 32
 
 
 @pytest.mark.anyio
@@ -310,6 +409,63 @@ async def test_worker_unknown_intent_uses_fallback():
     assert _FALLBACK_PROMPT == _PROMPTS["execution"]
 
 
+@pytest.mark.anyio
+async def test_worker_uses_injected_model_provider():
+    """Worker routes generation through the injected model provider."""
+    from modules.worker_llm.worker import WorkerLLM
+
+    provider = StubModelProvider(generate_result='{"action":"respond","content":"done"}')
+    worker = WorkerLLM(model_provider=provider, model_provider_name="stub")
+    result = await worker.generate("Write a haiku", "execution", request_id="req-2")
+
+    assert result == '{"action":"respond","content":"done"}'
+    assert len(provider.generate_calls) == 1
+    assert provider.generate_calls[0]["model"] == "llama3.2:3b"
+    assert "Write a haiku" in provider.generate_calls[0]["prompt"]
+    assert provider.generate_calls[0]["kwargs"]["request_id"] == "req-2"
+
+
+@pytest.mark.anyio
+async def test_worker_llm_call_log_includes_model_provider(caplog):
+    """Worker llm_call log includes the injected model provider name."""
+    import logging
+    from modules.worker_llm.worker import WorkerLLM
+
+    provider = StubModelProvider(generate_result='{"action":"respond","content":"done"}')
+    worker = WorkerLLM(model_provider=provider, model_provider_name="stub")
+
+    with caplog.at_level(logging.INFO, logger="modules.worker_llm.worker"):
+        await worker.generate("Write a haiku", "execution", request_id="req-3")
+
+    assert any("llm_call" in r.message and "model_provider=stub" in r.message for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_worker_uses_planning_prompt_with_provider():
+    """Worker sends the planning prompt text through the provider."""
+    from modules.worker_llm.worker import WorkerLLM
+
+    provider = StubModelProvider(generate_result='{"action":"respond","content":"done"}')
+    worker = WorkerLLM(model_provider=provider, model_provider_name="stub")
+    await worker.generate("How do I deploy this?", "planning", request_id="req-plan")
+
+    prompt = provider.generate_calls[0]["prompt"].lower()
+    assert "numbered steps" in prompt or "exactly 3 to 5" in prompt
+
+
+@pytest.mark.anyio
+async def test_worker_uses_analysis_prompt_with_provider():
+    """Worker sends the analysis prompt text through the provider."""
+    from modules.worker_llm.worker import WorkerLLM
+
+    provider = StubModelProvider(generate_result='{"action":"respond","content":"done"}')
+    worker = WorkerLLM(model_provider=provider, model_provider_name="stub")
+    await worker.generate("Compare PostgreSQL and SQLite", "analysis", request_id="req-analysis")
+
+    prompt = provider.generate_calls[0]["prompt"].lower()
+    assert "analytical assistant" in prompt or "focused, insightful response" in prompt
+
+
 # ---------------------------------------------------------------------------
 # Phase 2: graceful worker failure handling
 # ---------------------------------------------------------------------------
@@ -322,7 +478,7 @@ def test_ingest_worker_failure_returns_graceful_response():
         patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify),
         patch(
             "modules.worker_llm.worker.WorkerLLM.generate",
-            side_effect=httpx.ConnectError("refused"),
+            side_effect=ModelProviderConnectionError("refused"),
         ),
     ):
         response = client.post("/ingest", json={"input": "Run a script"})
@@ -341,7 +497,7 @@ def test_ingest_worker_timeout_returns_graceful_response():
         patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify),
         patch(
             "modules.worker_llm.worker.WorkerLLM.generate",
-            side_effect=httpx.TimeoutException("timed out"),
+            side_effect=ModelProviderTimeoutError("timed out"),
         ),
     ):
         response = client.post("/ingest", json={"input": "Do something slow"})
@@ -416,7 +572,7 @@ async def test_classifier_result_logged_for_prefix_match(caplog):
 
     from modules.classifier_basic.classifier import ClassifierBasic
 
-    classifier = ClassifierBasic()
+    classifier = ClassifierBasic(model_provider=StubModelProvider(), model_provider_name="stub")
     with caplog.at_level(logging.INFO, logger="modules.classifier_basic.classifier"):
         await classifier.classify("Write a haiku", request_id="test-789")
 
@@ -908,17 +1064,16 @@ def test_module_registry_unknown_classifier_logs_lookup_failed(caplog):
 def test_model_registry_duplicate_raises():
     """Registering the same model provider twice raises ValueError."""
     from coretex.registry.model_registry import ModelProviderRegistry
-    from coretex.interfaces.model_provider import ModelProvider
 
     class _Dummy(ModelProvider):
-        async def generate(self, prompt: str, **kwargs: object) -> str:
+        async def generate(self, model: str, prompt: str, **kwargs: object) -> str:
             return ""
-        async def chat(self, messages: list, **kwargs: object) -> str:
+        async def chat(self, model: str, messages: list, **kwargs: object) -> str:
             return ""
 
     registry = ModelProviderRegistry()
     registry.register("dup", _Dummy())
-    with pytest.raises(ValueError, match="already registered"):
+    with pytest.raises(ValueError, match="Model provider already registered"):
         registry.register("dup", _Dummy())
 
 
@@ -927,7 +1082,7 @@ def test_model_registry_unknown_raises():
     from coretex.registry.model_registry import ModelProviderRegistry
 
     registry = ModelProviderRegistry()
-    with pytest.raises(ValueError, match="Unknown component"):
+    with pytest.raises(ValueError, match="Unknown model provider"):
         registry.get("nonexistent")
 
 
@@ -941,6 +1096,256 @@ def test_model_registry_unknown_logs_lookup_failed(caplog):
         with pytest.raises(ValueError):
             registry.get("ghost")
     assert any("registry_lookup_failed" in r.message for r in caplog.records)
+
+
+def test_model_registry_list_returns_registered_names():
+    """list() returns the registered model provider names."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+
+    registry = ModelProviderRegistry()
+    registry.register("alpha", StubModelProvider())
+    registry.register("beta", StubModelProvider())
+
+    assert registry.list() == ["alpha", "beta"]
+
+
+def test_model_registry_get_returns_registered_instance():
+    """get() returns the exact registered model provider instance."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+
+    registry = ModelProviderRegistry()
+    provider = StubModelProvider()
+    registry.register("alpha", provider)
+
+    assert registry.get("alpha") is provider
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_generate_calls_api_and_returns_response():
+    """OllamaProvider.generate() POSTs to /api/generate and returns response text."""
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    seen: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"response": "worker output"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            seen["url"] = url
+            seen["json"] = json
+            return _Response()
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        result = await provider.generate("llama3.2:3b", "prompt text", num_predict=42)
+
+    assert result == "worker output"
+    assert str(seen["url"]).endswith("/api/generate")
+    assert seen["json"]["model"] == "llama3.2:3b"
+    assert seen["json"]["prompt"] == "prompt text"
+    assert seen["json"]["options"]["num_predict"] == 42
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_generate_uses_default_max_tokens():
+    """OllamaProvider.generate() uses settings.max_tokens when num_predict is omitted."""
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    seen: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"response": "worker output"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            seen["json"] = json
+            return _Response()
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        await provider.generate("llama3.2:3b", "prompt text")
+
+    assert seen["json"]["options"]["num_predict"] == 256
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_chat_calls_api_and_returns_message_content():
+    """OllamaProvider.chat() POSTs to /api/chat and returns assistant message content."""
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    seen: dict[str, object] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, dict[str, str]]:
+            return {"message": {"content": '{"intent":"planning","confidence":0.9}'}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            seen["url"] = url
+            seen["json"] = json
+            return _Response()
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        result = await provider.chat(
+            "llama3.2:3b",
+            [{"role": "user", "content": "hello"}],
+            format="json",
+            options={"temperature": 0},
+        )
+
+    assert result == '{"intent":"planning","confidence":0.9}'
+    assert str(seen["url"]).endswith("/api/chat")
+    assert seen["json"]["format"] == "json"
+    assert seen["json"]["options"]["temperature"] == 0
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_generate_logs_events(caplog):
+    """OllamaProvider.generate() emits start and complete events."""
+    import logging
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"response": "worker output"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            return _Response()
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        with caplog.at_level(logging.INFO, logger="modules.model_provider_ollama.provider"):
+            await provider.generate("llama3.2:3b", "prompt text", request_id="gen-1")
+
+    messages = [r.message for r in caplog.records]
+    assert any("model_provider_generate_start" in m for m in messages)
+    assert any("model_provider_generate_complete" in m and "duration_ms=" in m for m in messages)
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_chat_logs_events(caplog):
+    """OllamaProvider.chat() emits start and complete events."""
+    import logging
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, dict[str, str]]:
+            return {"message": {"content": '{"intent":"planning","confidence":0.9}'}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            return _Response()
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        with caplog.at_level(logging.INFO, logger="modules.model_provider_ollama.provider"):
+            await provider.chat("llama3.2:3b", [{"role": "user", "content": "hello"}], request_id="chat-1")
+
+    messages = [r.message for r in caplog.records]
+    assert any("model_provider_chat_start" in m for m in messages)
+    assert any("model_provider_chat_complete" in m and "duration_ms=" in m for m in messages)
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_generate_wraps_request_errors():
+    """OllamaProvider.generate() converts transport errors to ModelProviderConnectionError."""
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            raise httpx.ConnectError("refused")
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        with pytest.raises(ModelProviderConnectionError):
+            await provider.generate("llama3.2:3b", "prompt text")
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_chat_wraps_http_status_errors():
+    """OllamaProvider.chat() converts HTTP status failures to ModelProviderResponseError."""
+    from modules.model_provider_ollama.provider import OllamaProvider
+
+    class _Response:
+        status_code = 503
+        text = "backend unavailable"
+
+        def raise_for_status(self) -> None:
+            raise httpx.HTTPStatusError("bad", request=None, response=self)
+
+        def json(self) -> dict[str, object]:
+            return {}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            return _Response()
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        provider = OllamaProvider()
+        with pytest.raises(ModelProviderResponseError, match="Ollama chat failed"):
+            await provider.chat("llama3.2:3b", [{"role": "user", "content": "hello"}])
 
 
 def test_pipeline_registry_duplicate_raises():
@@ -1072,6 +1477,82 @@ def test_module_loader_empty_registration_logs_warning(tmp_path, monkeypatch, ca
     assert any("module_registered_nothing" in r.message for r in caplog.records)
 
 
+def test_module_loader_model_provider_registration_counts_as_component(tmp_path, monkeypatch, caplog):
+    """A module that only registers a model provider should not be flagged as empty."""
+    import logging
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from coretex.runtime.loader import ModuleLoader
+
+    mod_dir = tmp_path / "provideronly"
+    mod_dir.mkdir()
+    (mod_dir / "__init__.py").write_text("")
+    (mod_dir / "module.py").write_text(
+        "class _Provider:\n"
+        "    async def generate(self, model, prompt, **kwargs):\n"
+        "        return ''\n"
+        "    async def chat(self, model, messages, **kwargs):\n"
+        "        return ''\n"
+        "def register(module_registry, tool_registry, model_registry):\n"
+        "    model_registry.register('provider_only', _Provider())\n"
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mr = ModuleRegistry()
+    tr = ToolRegistry()
+    loader = ModuleLoader(mr, tr)
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.loader"):
+        loader.load("provideronly.module")
+
+    assert not any("module_registered_nothing" in r.message for r in caplog.records)
+
+
+def test_model_provider_module_registers_ollama_provider():
+    """model_provider_ollama.module registers the default provider under 'ollama'."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from modules.model_provider_ollama.module import register
+
+    model_registry = ModelProviderRegistry()
+    register(ModuleRegistry(), ToolRegistry(), model_registry)
+
+    assert "ollama" in model_registry.list()
+
+
+def test_classifier_module_registers_classifier_with_ollama_provider():
+    """classifier_basic.module wires the default ollama provider into the classifier."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from modules.classifier_basic.module import register
+
+    module_registry = ModuleRegistry()
+    model_registry = ModelProviderRegistry()
+    model_registry.register("ollama", StubModelProvider())
+    register(module_registry, ToolRegistry(), model_registry)
+
+    classifier = module_registry.get_classifier("classifier_basic")
+    assert classifier.model_provider_name == "ollama"
+
+
+def test_worker_module_registers_worker_with_ollama_provider():
+    """worker_llm.module wires the default ollama provider into the worker."""
+    from coretex.registry.model_registry import ModelProviderRegistry
+    from coretex.registry.module_registry import ModuleRegistry
+    from coretex.registry.tool_registry import ToolRegistry
+    from modules.worker_llm.module import register
+
+    module_registry = ModuleRegistry()
+    model_registry = ModelProviderRegistry()
+    model_registry.register("ollama", StubModelProvider())
+    register(module_registry, ToolRegistry(), model_registry)
+
+    worker = module_registry.get_worker("worker_llm")
+    assert worker.model_provider_name == "ollama"
+
+
 def test_module_loader_import_error_raises(tmp_path, monkeypatch):
     """ModuleLoader.load() raises ImportError for a non-existent module path."""
     from coretex.registry.module_registry import ModuleRegistry
@@ -1160,11 +1641,10 @@ def test_executor_tool_runtime_exception_propagates():
 
 
 def test_pipeline_classifier_http_failure_returns_clarification():
-    """Classifier HTTP failure falls back to intent=ambiguous and clarification response."""
-    import httpx
+    """Classifier provider failure falls back to intent=ambiguous and clarification response."""
     with patch(
         "modules.classifier_basic.classifier.ClassifierBasic.classify",
-        side_effect=httpx.ConnectError("refused"),
+        side_effect=ModelProviderConnectionError("refused"),
     ):
         response = client.post("/ingest", json={"input": "Do something"})
 
@@ -1175,8 +1655,7 @@ def test_pipeline_classifier_http_failure_returns_clarification():
 
 
 def test_pipeline_worker_http_failure_returns_graceful_response():
-    """Worker HTTP failure returns 200 with failure response."""
-    import httpx
+    """Worker provider failure returns 200 with failure response."""
     mock_classify = AsyncMock(
         return_value=__import__(
             "coretex.interfaces.classifier",
@@ -1187,7 +1666,7 @@ def test_pipeline_worker_http_failure_returns_graceful_response():
         patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify),
         patch(
             "modules.worker_llm.worker.WorkerLLM.generate",
-            side_effect=httpx.HTTPStatusError("error", request=None, response=None),
+            side_effect=ModelProviderResponseError("error", status_code=503, body="unavailable"),
         ),
     ):
         response = client.post("/ingest", json={"input": "Do something"})
@@ -1289,6 +1768,22 @@ def test_pipeline_logs_classifier_complete(caplog, mock_classify_execution, mock
     assert any("classifier_complete" in r.message for r in caplog.records)
 
 
+def test_pipeline_logs_classifier_start_with_model_provider(caplog, mock_classify_execution, mock_worker_response):
+    """event=classifier_start includes the configured model provider name."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    classifier_records = [r for r in caplog.records if "classifier_start" in r.message]
+    assert classifier_records
+    assert any("model_provider=ollama" in r.message for r in classifier_records)
+
+
 def test_pipeline_logs_router_selected(caplog, mock_classify_execution, mock_worker_response):
     """event=router_selected is emitted after routing."""
     import logging
@@ -1315,6 +1810,22 @@ def test_pipeline_logs_worker_complete(caplog, mock_classify_execution, mock_wor
             client.post("/ingest", json={"input": "Hello"})
 
     assert any("worker_complete" in r.message for r in caplog.records)
+
+
+def test_pipeline_logs_worker_start_with_model_provider(caplog, mock_classify_execution, mock_worker_response):
+    """event=worker_start includes the configured model provider name."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="coretex.runtime.pipeline"):
+        with (
+            patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify_execution),
+            patch("modules.worker_llm.worker.WorkerLLM.generate", mock_worker_response),
+        ):
+            client.post("/ingest", json={"input": "Hello"})
+
+    worker_records = [r for r in caplog.records if "worker_start" in r.message]
+    assert worker_records
+    assert any("model_provider=ollama" in r.message for r in worker_records)
 
 
 def test_pipeline_logs_request_complete(caplog, mock_classify_execution, mock_worker_response):
@@ -1364,14 +1875,13 @@ def test_pipeline_classifier_complete_contains_duration_ms(caplog, mock_classify
 
 
 def test_pipeline_classifier_failure_logs_event(caplog):
-    """event=pipeline_classifier_failure is emitted when classifier raises HTTP error."""
+    """event=pipeline_classifier_failure is emitted when classifier raises provider error."""
     import logging
-    import httpx
 
     with caplog.at_level(logging.ERROR, logger="coretex.runtime.pipeline"):
         with patch(
             "modules.classifier_basic.classifier.ClassifierBasic.classify",
-            side_effect=httpx.ConnectError("refused"),
+            side_effect=ModelProviderConnectionError("refused"),
         ):
             client.post("/ingest", json={"input": "Something"})
 
@@ -1379,9 +1889,8 @@ def test_pipeline_classifier_failure_logs_event(caplog):
 
 
 def test_pipeline_worker_failure_logs_event(caplog):
-    """event=pipeline_worker_failure is emitted when worker raises HTTP error."""
+    """event=pipeline_worker_failure is emitted when worker raises provider error."""
     import logging
-    import httpx
 
     mock_classify = AsyncMock(
         return_value=__import__(
@@ -1394,7 +1903,7 @@ def test_pipeline_worker_failure_logs_event(caplog):
             patch("modules.classifier_basic.classifier.ClassifierBasic.classify", mock_classify),
             patch(
                 "modules.worker_llm.worker.WorkerLLM.generate",
-                side_effect=httpx.ConnectError("refused"),
+                side_effect=ModelProviderConnectionError("refused"),
             ),
         ):
             client.post("/ingest", json={"input": "Something"})
@@ -1426,6 +1935,46 @@ def test_pipeline_tool_failure_logs_event(caplog, mock_classify_execution):
         assert any("pipeline_tool_failure" in r.message for r in caplog.records)
     finally:
         tool_registry._tools.pop("log_fail_tool", None)
+
+
+def test_pipeline_emits_model_provider_events(caplog):
+    """A full pipeline run emits model provider start/complete events."""
+    import logging
+
+    class _Response:
+        def __init__(self, payload: dict[str, object]):
+            self._payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, json: dict[str, object]):
+            if url.endswith("/api/chat"):
+                return _Response({"message": {"content": '{"intent":"execution","confidence":0.91}'}})
+            if url.endswith("/api/generate"):
+                return _Response({"response": '{"action":"respond","content":"done"}'})
+            raise AssertionError(f"Unexpected URL: {url}")
+
+    with patch("modules.model_provider_ollama.provider.httpx.AsyncClient", return_value=_Client()):
+        with caplog.at_level(logging.INFO):
+            response = client.post("/ingest", json={"input": "Compare distributed systems"})
+
+    assert response.status_code == 200
+    messages = [r.message for r in caplog.records]
+    assert any("model_provider_chat_start" in m for m in messages)
+    assert any("model_provider_chat_complete" in m for m in messages)
+    assert any("model_provider_generate_start" in m for m in messages)
+    assert any("model_provider_generate_complete" in m for m in messages)
 
 
 # ---------------------------------------------------------------------------
